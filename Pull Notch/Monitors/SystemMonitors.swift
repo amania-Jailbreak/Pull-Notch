@@ -291,9 +291,25 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
             let rmsLike = sqrt(average)
             let energy = min(1, (rmsLike * 0.9) + (peak * 0.56))
             let weighted = min(1, energy * bucketWeights[index])
-            let flutter = max(0, sin((timePhase * 9.5) + CGFloat(index) * 0.85)) * weighted * 0.14
-            return 5 + (min(1, weighted + flutter) * 12)
+            let accelerated = acceleratedVisualizerEnergy(weighted)
+            let flutter = max(0, sin((timePhase * 9.5) + CGFloat(index) * 0.85)) * accelerated * 0.18
+            let dynamicLift = peak > 0.72 ? min(0.16, (peak - 0.72) * 0.55) : 0
+            return 5 + (min(1, accelerated + flutter + dynamicLift) * 14.5)
         }
+    }
+
+    private func acceleratedVisualizerEnergy(_ energy: CGFloat) -> CGFloat {
+        let clamped = min(max(energy, 0), 1)
+        let threshold: CGFloat = 0.34
+
+        guard clamped > threshold else {
+            return pow(clamped, 1.35) * 0.78
+        }
+
+        let base = pow(threshold, 1.35) * 0.78
+        let acceleratedPortion = (clamped - threshold) / (1 - threshold)
+        let curve = pow(acceleratedPortion, 0.58)
+        return min(1, base + (curve * (1 - base)))
     }
 
     private func accumulateLevels(
