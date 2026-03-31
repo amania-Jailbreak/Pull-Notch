@@ -117,6 +117,7 @@ jobs:
 
           mkdir -p dist/dmg-root
           cp -R "$app_path" dist/dmg-root/
+          ln -s /Applications dist/dmg-root/Applications
 
           dmg_name="Pull-Notch-${{ steps.version.outputs.current }}.dmg"
           dmg_path="dist/$dmg_name"
