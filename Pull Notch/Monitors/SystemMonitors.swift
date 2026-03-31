@@ -107,9 +107,9 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
             40...120,
             120...280,
             280...640,
-            640...1_600,
-            1_600...4_800,
-            4_800...14_000
+            640...900,
+            900...4_800,
+            4_800...6_000
         ]
     }()
     private static let fftSize = 2048
@@ -253,7 +253,7 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
         }
 
         let bandCount = Self.visualizerBandRanges.count
-        let bucketWeights: [CGFloat] = [0.62, 0.76, 1.8, 2.08, 2.04, 1.12]
+        let bucketWeights: [CGFloat] = [0.62, 0.76, 1.8, 2.08, 2.04, 3.50]
         let timePhase = CGFloat(Date().timeIntervalSinceReferenceDate)
         let frequencyBandPeaks = fftBandPeaks(
             from: monoSamples,

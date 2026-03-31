@@ -93,6 +93,23 @@ struct ContentView: View {
                         overlayModel.toggleMusicPlayer()
                     }
                 }
+                .contextMenu {
+                    if overlayModel.expandedPanel == nil {
+                        Button {
+                            overlayModel.openSettingsWindow()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            NSApp.terminate(nil)
+                        } label: {
+                            Label("Quit Pull Notch", systemImage: "power")
+                        }
+                    }
+                }
                 .allowsHitTesting(overlayModel.expandedPanel != .musicPlayer)
                 .animation(musicPlayerExpansionAnimation, value: overlayModel.expandedPanel == .musicPlayer)
         }
@@ -523,10 +540,6 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 12) {
                 expandedPageHeader
                 expandedPageContent
-
-                panelActionButton("Settings", systemName: "gearshape.fill") {
-                    overlayModel.openSettingsWindow()
-                }
             }
             .padding(.top, 60)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -597,6 +610,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(.top, 2)
+
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
 
@@ -607,9 +621,11 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
 
-                    visualizerView(isActive: overlayModel.isPlaying)
-                        .frame(width: 34)
-                        .padding(.trailing, 4)
+                    HStack(alignment: .center, spacing: 10) {
+                        visualizerView(isActive: overlayModel.isPlaying)
+                            .frame(width: 34)
+                    }
+                    .padding(.trailing, 4)
                 }
                 .frame(width: 92)
                 .frame(maxHeight: .infinity, alignment: .trailing)
@@ -960,10 +976,6 @@ struct ContentView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.gray)
                 .fixedSize(horizontal: false, vertical: true)
-
-            panelActionButton("Settings", systemName: "gearshape.fill") {
-                overlayModel.openSettingsWindow()
-            }
         }
         .frame(width: overlayModel.visibleWidth - 28, alignment: .leading)
     }
