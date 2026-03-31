@@ -1,171 +1,171 @@
 name: Release DMG
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "Pull Notch.xcodeproj/project.pbxproj"
-      - "Pull-Notch-Info.plist"
-  workflow_dispatch:
+    push:
+        branches:
+            - main
+        paths:
+            - "Pull Notch.xcodeproj/project.pbxproj"
+            - "Pull-Notch-Info.plist"
+    workflow_dispatch:
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
+    release:
+        runs-on: macos-26
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
-      - name: Detect release version change
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Detect release version change
+              id: version
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          project_file="Pull Notch.xcodeproj/project.pbxproj"
-          current_version="$(grep -m 1 'MARKETING_VERSION = ' "$project_file" | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/')"
+                  project_file="Pull Notch.xcodeproj/project.pbxproj"
+                  current_version="$(grep -m 1 'MARKETING_VERSION = ' "$project_file" | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/')"
 
-          if [[ -z "$current_version" ]]; then
-            echo "Could not determine MARKETING_VERSION from $project_file" >&2
-            exit 1
-          fi
+                  if [[ -z "$current_version" ]]; then
+                    echo "Could not determine MARKETING_VERSION from $project_file" >&2
+                    exit 1
+                  fi
 
-          previous_version=""
-          if [[ "${{ github.event_name }}" == "push" ]] && git cat-file -e "${{ github.event.before }}:$project_file" 2>/dev/null; then
-            previous_version="$(git show "${{ github.event.before }}:$project_file" | grep -m 1 'MARKETING_VERSION = ' | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/' || true)"
-          fi
+                  previous_version=""
+                  if [[ "${{ github.event_name }}" == "push" ]] && git cat-file -e "${{ github.event.before }}:$project_file" 2>/dev/null; then
+                    previous_version="$(git show "${{ github.event.before }}:$project_file" | grep -m 1 'MARKETING_VERSION = ' | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/' || true)"
+                  fi
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version_changed="true"
-          elif [[ -n "$previous_version" && "$previous_version" != "$current_version" ]]; then
-            version_changed="true"
-          else
-            version_changed="false"
-          fi
+                  if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+                    version_changed="true"
+                  elif [[ -n "$previous_version" && "$previous_version" != "$current_version" ]]; then
+                    version_changed="true"
+                  else
+                    version_changed="false"
+                  fi
 
-          tag_name="v$current_version"
+                  tag_name="v$current_version"
 
-          echo "current=$current_version" >> "$GITHUB_OUTPUT"
-          echo "previous=$previous_version" >> "$GITHUB_OUTPUT"
-          echo "changed=$version_changed" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
+                  echo "current=$current_version" >> "$GITHUB_OUTPUT"
+                  echo "previous=$previous_version" >> "$GITHUB_OUTPUT"
+                  echo "changed=$version_changed" >> "$GITHUB_OUTPUT"
+                  echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
 
-      - name: Stop when version did not change
-        if: steps.version.outputs.changed != 'true'
-        shell: bash
-        run: echo "MARKETING_VERSION did not change. Skipping DMG release."
+            - name: Stop when version did not change
+              if: steps.version.outputs.changed != 'true'
+              shell: bash
+              run: echo "MARKETING_VERSION did not change. Skipping DMG release."
 
-      - name: Ensure release tag does not already exist
-        if: steps.version.outputs.changed == 'true'
-        id: existing_release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Ensure release tag does not already exist
+              if: steps.version.outputs.changed == 'true'
+              id: existing_release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+                  if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+                    echo "exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "exists=false" >> "$GITHUB_OUTPUT"
+                  fi
 
-      - name: Stop when release already exists
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists == 'true'
-        shell: bash
-        run: echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
+            - name: Stop when release already exists
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists == 'true'
+              shell: bash
+              run: echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
 
-      - name: Select Xcode
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+            - name: Select Xcode
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              uses: maxim-lobanov/setup-xcode@v1
+              with:
+                  xcode-version: 26.4
 
-      - name: Build release app
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Build release app
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          xcodebuild \
-            -project "Pull Notch.xcodeproj" \
-            -scheme "Pull Notch" \
-            -configuration Release \
-            -derivedDataPath DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+                  xcodebuild \
+                    -project "Pull Notch.xcodeproj" \
+                    -scheme "Pull Notch" \
+                    -configuration Release \
+                    -derivedDataPath DerivedData \
+                    CODE_SIGNING_ALLOWED=NO \
+                    CODE_SIGNING_REQUIRED=NO \
+                    build
 
-      - name: Create DMG
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-        id: dmg
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Create DMG
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              id: dmg
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          app_path="DerivedData/Build/Products/Release/Pull Notch.app"
-          if [[ ! -d "$app_path" ]]; then
-            echo "Built app not found at $app_path" >&2
-            exit 1
-          fi
+                  app_path="DerivedData/Build/Products/Release/Pull Notch.app"
+                  if [[ ! -d "$app_path" ]]; then
+                    echo "Built app not found at $app_path" >&2
+                    exit 1
+                  fi
 
-          mkdir -p dist/dmg-root
-          cp -R "$app_path" dist/dmg-root/
-          ln -s /Applications dist/dmg-root/Applications
+                  mkdir -p dist/dmg-root
+                  cp -R "$app_path" dist/dmg-root/
+                  ln -s /Applications dist/dmg-root/Applications
 
-          dmg_name="Pull-Notch-${{ steps.version.outputs.current }}.dmg"
-          dmg_path="dist/$dmg_name"
+                  dmg_name="Pull-Notch-${{ steps.version.outputs.current }}.dmg"
+                  dmg_path="dist/$dmg_name"
 
-          hdiutil create \
-            -volname "Pull Notch" \
-            -srcfolder "dist/dmg-root" \
-            -ov \
-            -format UDZO \
-            "$dmg_path"
+                  hdiutil create \
+                    -volname "Pull Notch" \
+                    -srcfolder "dist/dmg-root" \
+                    -ov \
+                    -format UDZO \
+                    "$dmg_path"
 
-          echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
-          echo "name=$dmg_name" >> "$GITHUB_OUTPUT"
+                  echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
+                  echo "name=$dmg_name" >> "$GITHUB_OUTPUT"
 
-      - name: Generate release notes
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-        id: notes
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Generate release notes
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              id: notes
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          previous_tag="$(git tag --sort=-creatordate | grep -Fxv "${{ steps.version.outputs.tag }}" | head -n 1 || true)"
-          notes_file="dist/release-notes.md"
+                  previous_tag="$(git tag --sort=-creatordate | grep -Fxv "${{ steps.version.outputs.tag }}" | head -n 1 || true)"
+                  notes_file="dist/release-notes.md"
 
-          {
-            echo "## Changes"
-            echo
-            if [[ -n "$previous_tag" ]]; then
-              git log "${previous_tag}..HEAD" --pretty='- %s (%h)'
-            else
-              git log --pretty='- %s (%h)'
-            fi
-          } > "$notes_file"
+                  {
+                    echo "## Changes"
+                    echo
+                    if [[ -n "$previous_tag" ]]; then
+                      git log "${previous_tag}..HEAD" --pretty='- %s (%h)'
+                    else
+                      git log --pretty='- %s (%h)'
+                    fi
+                  } > "$notes_file"
 
-          echo "file=$notes_file" >> "$GITHUB_OUTPUT"
+                  echo "file=$notes_file" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub release
-        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
+            - name: Create GitHub release
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              shell: bash
+              run: |
+                  set -euo pipefail
 
-          release_title="Pull Notch ${{ steps.version.outputs.current }}"
+                  release_title="Pull Notch ${{ steps.version.outputs.current }}"
 
-          gh release create "${{ steps.version.outputs.tag }}" \
-            "${{ steps.dmg.outputs.path }}" \
-            --target "${{ github.sha }}" \
-            --title "$release_title" \
-            --notes-file "${{ steps.notes.outputs.file }}"
+                  gh release create "${{ steps.version.outputs.tag }}" \
+                    "${{ steps.dmg.outputs.path }}" \
+                    --target "${{ github.sha }}" \
+                    --title "$release_title" \
+                    --notes-file "${{ steps.notes.outputs.file }}"
