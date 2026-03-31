@@ -322,40 +322,7 @@ struct SettingsWindowView: View {
     private var tabPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(SettingsTab.allCases) { tab in
-                Button {
-                    withAnimation(.easeOut(duration: 0.16)) {
-                        selectedTab = tab
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: iconName(for: tab))
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 14)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tab.title)
-                                .font(.system(size: 13, weight: .semibold))
-
-                            Text(subtitle(for: tab))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(selectedTab == tab ? .black.opacity(0.7) : .white.opacity(0.42))
-                        }
-
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(selectedTab == tab ? .black : .white.opacity(0.82))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(selectedTab == tab ? Color.white : Color.white.opacity(0.04))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(selectedTab == tab ? 0 : 0.08), lineWidth: 1)
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
+                tabPickerButton(for: tab)
             }
         }
         .frame(width: 210, alignment: .topLeading)
@@ -368,6 +335,49 @@ struct SettingsWindowView: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
         )
+    }
+
+    private func tabPickerButton(for tab: SettingsTab) -> some View {
+        let isSelected = selectedTab == tab
+        let subtitleColor: Color = isSelected ? .black.opacity(0.7) : .white.opacity(0.42)
+        let foregroundColor: Color = isSelected ? .black : .white.opacity(0.82)
+        let backgroundFill: Color = isSelected ? .white : .white.opacity(0.04)
+        let borderOpacity: Double = isSelected ? 0 : 0.08
+
+        return Button {
+            withAnimation(.easeOut(duration: 0.16)) {
+                selectedTab = tab
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: iconName(for: tab))
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 14)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tab.title)
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Text(subtitle(for: tab))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(subtitleColor)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(foregroundColor)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(backgroundFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(borderOpacity), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
