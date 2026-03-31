@@ -327,23 +327,24 @@ final class SystemVolumeMonitor {
         pollingTask?.cancel()
 
         pollingTask = Task {
-            lastObservedVolume = currentSystemVolume()
+            lastObservedVolume = currentSystemVolume(deviceID: defaultOutputDeviceID())
 
             while !Task.isCancelled {
-                let volume = currentSystemVolume()
-                if let volume, let lastObservedVolume, abs(volume - lastObservedVolume) > 0.01 {
-                    overlayModel.showVolume(level: volume)
+                let deviceID = defaultOutputDeviceID()
+                let volume = currentSystemVolume(deviceID: deviceID)
+                if let volume, let lastObservedVolume, abs(volume - lastObservedVolume) > 0.005 {
+                    overlayModel.showVolume(level: volume, outputDeviceName: outputDeviceName(for: deviceID))
                 }
                 if let volume {
                     lastObservedVolume = volume
                 }
-                try? await Task.sleep(for: .milliseconds(180))
+                try? await Task.sleep(for: .milliseconds(80))
             }
         }
     }
 
-    private func currentSystemVolume() -> Double? {
-        guard let deviceID = defaultOutputDeviceID() else {
+    private func currentSystemVolume(deviceID: AudioDeviceID?) -> Double? {
+        guard let deviceID else {
             return nil
         }
 
@@ -405,6 +406,26 @@ final class SystemVolumeMonitor {
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &volume)
         guard status == noErr else { return nil }
         return Double(volume)
+    }
+
+    private func outputDeviceName(for deviceID: AudioDeviceID?) -> String? {
+        guard let deviceID else { return nil }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        guard AudioObjectHasProperty(deviceID, &address) else {
+            return nil
+        }
+
+        var name: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
+        guard status == noErr else { return nil }
+        return name as String
     }
 }
 

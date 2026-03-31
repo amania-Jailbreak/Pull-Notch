@@ -779,6 +779,7 @@ final class NotchOverlayModel {
     let compactEmptyWidth: CGFloat = 244
     let notchHeight: CGFloat = 52
     let expandedHeight: CGFloat = 88
+    let volumeExpandedHeight: CGFloat = 112
     let playerExpandedHeight: CGFloat = 286
     let widgetExpandedHeight: CGFloat = 252
     let onboardingExpandedHeight: CGFloat = 176
@@ -788,6 +789,7 @@ final class NotchOverlayModel {
 
     private var collapseTask: Task<Void, Never>?
     private var volumeHideTask: Task<Void, Never>?
+    private var volumeOverlayVisibleUntil: Date?
     private var pomodoroTimerTask: Task<Void, Never>?
     private var temporaryWidgetTasks: [CompactWidgetPlacement: Task<Void, Never>] = [:]
     private var lyricsTask: Task<Void, Never>?
@@ -805,6 +807,7 @@ final class NotchOverlayModel {
     private(set) var showsHoverText = false
     private(set) var showsVolumeChange = false
     private(set) var volumeLevel: Double = 0
+    private(set) var volumeOutputDeviceName: String?
     private(set) var sourceApp: String?
     private(set) var artworkData: Data?
     private(set) var syncedLyrics: [SyncedLyricLine] = []
@@ -933,7 +936,7 @@ final class NotchOverlayModel {
             return expandedHeight
         }
         if showsVolumeChange {
-            return expandedHeight
+            return volumeExpandedHeight
         }
         if showsHoverChange {
             return expandedHeight
@@ -1162,7 +1165,10 @@ final class NotchOverlayModel {
             notifyLayoutChange()
             return
         }
-        showsVolumeChange = false
+        guard !showsVolumeChange else {
+            notifyLayoutChange()
+            return
+        }
         showsHoverChange = false
         showsHoverText = false
         showsTrackChange = true
@@ -1196,8 +1202,6 @@ final class NotchOverlayModel {
         lyricsLoadState = .idle
         lyricsProvider = nil
         currentLyricsRequestKey = nil
-        showsVolumeChange = false
-        volumeLevel = 0
         showsHoverChange = false
         showsHoverText = false
         isPlaying = false
@@ -1218,7 +1222,7 @@ final class NotchOverlayModel {
         } else {
             expandedPanel = .musicPlayer
             ensureExpandedWidgetPage()
-            showsVolumeChange = false
+            dismissVolumeOverlay()
             showsTrackChange = false
             showsTrackText = false
             perform(.generic)
@@ -1239,7 +1243,7 @@ final class NotchOverlayModel {
         guard expandedPanel != .onboarding else { return }
         collapseTask?.cancel()
         expandedPanel = nil
-        showsVolumeChange = false
+        dismissVolumeOverlay()
         showsTrackChange = false
         showsTrackText = false
         showsHoverChange = false
@@ -1272,25 +1276,21 @@ final class NotchOverlayModel {
         notifyLayoutChange()
     }
 
-    func showVolume(level: Double) {
+    func showVolume(level: Double, outputDeviceName: String?) {
         guard isFeatureEnabled(.volumeOverlay) else { return }
         guard expandedPanel == nil else { return }
 
-        volumeHideTask?.cancel()
         showsTrackChange = false
         showsTrackText = false
         showsHoverChange = false
         showsHoverText = false
         showsVolumeChange = true
         volumeLevel = max(0, min(1, level))
+        volumeOutputDeviceName = outputDeviceName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        print("VolumeOverlay: show level=\(String(format: "%.3f", volumeLevel)) device=\(volumeOutputDeviceName ?? "unknown")")
         notifyLayoutChange()
 
-        volumeHideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1.6))
-            guard !Task.isCancelled else { return }
-            self?.showsVolumeChange = false
-            self?.notifyLayoutChange()
-        }
+        extendVolumeOverlayVisibility(by: 2.6)
     }
 
     func send(_ command: MediaControlCommand) {
@@ -1607,7 +1607,7 @@ final class NotchOverlayModel {
             refreshCompactWidgets()
         case .volumeOverlay:
             if !isEnabled {
-                showsVolumeChange = false
+                dismissVolumeOverlay()
             }
         case .hoverTitle:
             if !isEnabled {
@@ -1969,6 +1969,49 @@ final class NotchOverlayModel {
             return max(0, position)
         }
         return min(max(0, position), duration)
+    }
+
+    private func extendVolumeOverlayVisibility(by duration: TimeInterval) {
+        let deadline = Date().addingTimeInterval(duration)
+        volumeOverlayVisibleUntil = deadline
+        print("VolumeOverlay: extend deadline=\(deadline.timeIntervalSince1970)")
+
+        guard volumeHideTask == nil else {
+            print("VolumeOverlay: hide watcher already running")
+            return
+        }
+
+        print("VolumeOverlay: start hide watcher")
+
+        volumeHideTask = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled {
+                guard let visibleUntil = self.volumeOverlayVisibleUntil else { break }
+                let remaining = visibleUntil.timeIntervalSinceNow
+
+                print("VolumeOverlay: watcher remaining=\(String(format: "%.3f", remaining))")
+
+                if remaining <= 0 {
+                    print("VolumeOverlay: deadline reached, dismissing")
+                    self.dismissVolumeOverlay()
+                    break
+                }
+
+                let sleepDuration = min(remaining, 0.12)
+                try? await Task.sleep(for: .seconds(sleepDuration))
+            }
+        }
+    }
+
+    private func dismissVolumeOverlay(resetLevel: Bool = false) {
+        print("VolumeOverlay: dismiss resetLevel=\(resetLevel)")
+        volumeHideTask?.cancel()
+        volumeHideTask = nil
+        volumeOverlayVisibleUntil = nil
+        showsVolumeChange = false
+        volumeOutputDeviceName = nil
+        if resetLevel {
+            volumeLevel = 0
+        }
     }
 
     private func startPomodoroTimer() {

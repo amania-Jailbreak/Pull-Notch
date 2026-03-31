@@ -334,29 +334,46 @@ struct ContentView: View {
     }
 
     private var volumeBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
 
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.12))
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.95), Color.white.opacity(0.68)],
-                                startPoint: .leading,
-                                endPoint: .trailing
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.12))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.95), Color.white.opacity(0.68)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: max(10, geometry.size.width * overlayModel.volumeLevel))
+                            .frame(width: max(10, geometry.size.width * overlayModel.volumeLevel))
+                            .animation(.spring(response: 0.24, dampingFraction: 0.82), value: overlayModel.volumeLevel)
+                    }
                 }
+                .frame(height: 8)
+
+                Text("\(Int((overlayModel.volumeLevel * 100).rounded()))%")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(width: 40, alignment: .trailing)
             }
-            .frame(height: 8)
+
+            if let outputDeviceName = overlayModel.volumeOutputDeviceName {
+                Text(outputDeviceName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
-        .frame(width: overlayModel.visibleWidth - 32, height: 18, alignment: .leading)
+        .frame(width: overlayModel.visibleWidth - 32, alignment: .leading)
     }
 
     private var onboardingPanel: some View {

@@ -263,9 +263,9 @@ enum PomodoroPhase {
     var duration: Int {
         switch self {
         case .focus:
-            return 25
+            return 25 * 60
         case .break:
-            return 5
+            return 5 * 60
         }
     }
 
