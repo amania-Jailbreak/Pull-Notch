@@ -63,6 +63,12 @@ final class AppleMusicNowPlayingMonitor {
             ? payload.artist ?? ""
             : statusTitle(for: isPlaying)
         let artworkData = payload.artworkData.flatMap { Data(base64Encoded: $0) }
+        let durationSeconds = payload.durationMicros.map { $0 / 1_000_000 } ?? payload.duration
+        let playbackPositionSeconds =
+            payload.elapsedTimeNowMicros.map { $0 / 1_000_000 }
+            ?? payload.elapsedTimeNow
+            ?? payload.elapsedTimeMicros.map { $0 / 1_000_000 }
+            ?? payload.elapsedTime
 
         return .success(
             .init(
@@ -71,7 +77,9 @@ final class AppleMusicNowPlayingMonitor {
                 artist: artist,
                 isPlaying: isPlaying,
                 bundleIdentifier: payload.bundleIdentifier ?? "unknown",
-                artworkData: artworkData
+                artworkData: artworkData,
+                durationSeconds: durationSeconds,
+                playbackPositionSeconds: playbackPositionSeconds
             )
         )
     }
@@ -496,6 +504,7 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
             startRefreshLoop()
         case .denied, .restricted:
             overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
+            overlayModel?.updateWeatherLocationStatus(message: "位置情報が使えないため天気を取得できませんでした。", isError: true)
         case .notDetermined:
             break
         @unknown default:
@@ -513,6 +522,7 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         guard manualLocationQuery == nil else { return }
         overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
+        overlayModel?.updateWeatherLocationStatus(message: "現在地の取得に失敗しました。", isError: true)
     }
 
     func setManualLocation(_ query: String?) {
@@ -584,11 +594,13 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
             latestCoordinate = placemarks.first?.location?.coordinate
             guard latestCoordinate != nil else {
                 overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
+                overlayModel?.updateWeatherLocationStatus(message: "'\(manualLocationQuery)' の場所を見つけられませんでした。", isError: true)
                 return
             }
             await fetchWeather()
         } catch {
             overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
+            overlayModel?.updateWeatherLocationStatus(message: "'\(manualLocationQuery)' の場所検索に失敗しました。", isError: true)
         }
     }
 
@@ -609,8 +621,20 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
                 temperatureText: "\(temperature)°",
                 symbolName: weatherSymbolName(for: response.current.weatherCode)
             )
+            if let manualLocationQuery, !manualLocationQuery.isEmpty {
+                overlayModel.updateWeatherLocationStatus(
+                    message: "'\(manualLocationQuery)' の天気を取得できました。 \(temperature)°",
+                    isError: false
+                )
+            }
         } catch {
             overlayModel.updateWeather(temperatureText: nil, symbolName: nil)
+            if let manualLocationQuery, !manualLocationQuery.isEmpty {
+                overlayModel.updateWeatherLocationStatus(
+                    message: "'\(manualLocationQuery)' の天気取得に失敗しました。",
+                    isError: true
+                )
+            }
         }
     }
 
@@ -636,7 +660,7 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
     }
 }
 
-private extension String {
+extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
     }

@@ -9,7 +9,7 @@ final class MediaRemoteAdapterBridge {
     func currentPayload() async -> String? {
         await withCheckedContinuation { continuation in
             queue.async {
-                let result = self.run(command: "get")
+                let result = self.run(command: "get", arguments: ["--now", "--micros"])
                 self.lastStatus = result.status
                 self.lastDiagnostics = result.combinedOutput
 

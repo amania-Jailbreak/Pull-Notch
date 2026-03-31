@@ -10,6 +10,8 @@ struct AppleMusicTrack {
     let isPlaying: Bool
     let bundleIdentifier: String
     let artworkData: Data?
+    let durationSeconds: TimeInterval?
+    let playbackPositionSeconds: TimeInterval?
 }
 
 struct MediaRemotePayload: Decodable, Sendable {
@@ -21,6 +23,43 @@ struct MediaRemotePayload: Decodable, Sendable {
     let artist: String?
     let playbackRate: Double?
     let artworkData: String?
+    let duration: Double?
+    let elapsedTime: Double?
+    let elapsedTimeNow: Double?
+    let durationMicros: Double?
+    let elapsedTimeMicros: Double?
+    let elapsedTimeNowMicros: Double?
+    let timestampEpochMicros: Double?
+}
+
+struct SyncedLyricLine: Equatable, Identifiable, Sendable {
+    let timestamp: TimeInterval
+    let text: String
+
+    var id: String {
+        "\(timestamp)-\(text)"
+    }
+}
+
+enum LyricsLoadState: Equatable {
+    case idle
+    case loading
+    case unavailable
+    case ready
+}
+
+enum LyricsProvider: String, Sendable {
+    case lrclib = "LRCLIB"
+    case petitLyrics = "PetitLyrics"
+    case musanovaKit = "MusanovaKit"
+    case qqMusic = "QQ Music"
+    case netEase = "NetEase"
+}
+
+struct ResolvedLyrics: Sendable {
+    let plainLyrics: String?
+    let syncedLyrics: String?
+    let provider: LyricsProvider
 }
 
 struct IslandPresentation: Equatable {
@@ -52,6 +91,11 @@ enum CompactWidgetPlacement: Equatable {
 enum MoveDirection {
     case up
     case down
+}
+
+enum ExpandedPageNavigationDirection {
+    case forward
+    case backward
 }
 
 enum CompactWidgetKind: String, CaseIterable, Identifiable {

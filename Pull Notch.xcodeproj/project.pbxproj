@@ -6,8 +6,18 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		877F0D032F7A1648006C7B4F /* MediaRemoteAdapterTestClient in Resources */ = {isa = PBXBuildFile; fileRef = 877F0D022F7A1648006C7B4F /* MediaRemoteAdapterTestClient */; };
+		877F0D052F7A1656006C7B4F /* mediaremote-adapter.pl in Resources */ = {isa = PBXBuildFile; fileRef = 877F0D042F7A1656006C7B4F /* mediaremote-adapter.pl */; };
+		877F0D0C2F7A16FF006C7B4F /* MediaRemoteAdapter.framework in Resources */ = {isa = PBXBuildFile; fileRef = 877F0D0B2F7A16FF006C7B4F /* MediaRemoteAdapter.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		877F0CDE2F79E4FA006C7B4F /* Pull Notch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pull Notch.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		877F0D022F7A1648006C7B4F /* MediaRemoteAdapterTestClient */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = MediaRemoteAdapterTestClient; path = Resources/MediaRemoteAdapter/MediaRemoteAdapterTestClient; sourceTree = "<group>"; };
+		877F0D042F7A1656006C7B4F /* mediaremote-adapter.pl */ = {isa = PBXFileReference; lastKnownFileType = text.script.perl; name = "mediaremote-adapter.pl"; path = "Resources/MediaRemoteAdapter/mediaremote-adapter.pl"; sourceTree = "<group>"; };
+		877F0D082F7A16D2006C7B4F /* MediaRemoteAdapter 3.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = "MediaRemoteAdapter 3.framework"; sourceTree = "<group>"; };
+		877F0D0B2F7A16FF006C7B4F /* MediaRemoteAdapter.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaRemoteAdapter.framework; path = Resources/MediaRemoteAdapter/MediaRemoteAdapter.framework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -32,8 +42,17 @@
 		877F0CD52F79E4FA006C7B4F = {
 			isa = PBXGroup;
 			children = (
+				877F0D0B2F7A16FF006C7B4F /* MediaRemoteAdapter.framework */,
+				877F0D042F7A1656006C7B4F /* mediaremote-adapter.pl */,
+				877F0D022F7A1648006C7B4F /* MediaRemoteAdapterTestClient */,
 				877F0CE02F79E4FA006C7B4F /* Pull Notch */,
 				877F0CDF2F79E4FA006C7B4F /* Products */,
+				877F0D082F7A16D2006C7B4F /* MediaRemoteAdapter 3.framework */,
+				877F0D132F7A95B9006C7B4F /* App */,
+				877F0D142F7A95BA006C7B4F /* Settings */,
+				877F0D152F7A95BB006C7B4F /* Monitors */,
+				877F0D162F7A95BD006C7B4F /* Models */,
+				877F0D172F7A95BE006C7B4F /* Infrastructure */,
 			);
 			sourceTree = "<group>";
 		};
@@ -43,6 +62,41 @@
 				877F0CDE2F79E4FA006C7B4F /* Pull Notch.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		877F0D132F7A95B9006C7B4F /* App */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		877F0D142F7A95BA006C7B4F /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		877F0D152F7A95BB006C7B4F /* Monitors */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Monitors;
+			sourceTree = "<group>";
+		};
+		877F0D162F7A95BD006C7B4F /* Models */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		877F0D172F7A95BE006C7B4F /* Infrastructure */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Infrastructure;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -94,6 +148,8 @@
 			);
 			mainGroup = 877F0CD52F79E4FA006C7B4F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 877F0CDF2F79E4FA006C7B4F /* Products */;
 			projectDirPath = "";
@@ -109,6 +165,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				877F0D0C2F7A16FF006C7B4F /* MediaRemoteAdapter.framework in Resources */,
+				877F0D052F7A1656006C7B4F /* mediaremote-adapter.pl in Resources */,
+				877F0D032F7A1648006C7B4F /* MediaRemoteAdapterTestClient in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -248,18 +307,26 @@
 		877F0CEA2F79E4FB006C7B4F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = PullNotch;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 57579C88LS;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Resources/MediaRemoteAdapter",
+					"$(PROJECT_DIR)",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Pull-Notch-Info.plist";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "macの各種アクティビティを監視し島に反映するために必要です";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Apple Musicで現在再生中の曲を表示するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "現在地から天気を取得するのに必要です";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -280,18 +347,26 @@
 		877F0CEB2F79E4FB006C7B4F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = PullNotch;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 57579C88LS;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Resources/MediaRemoteAdapter",
+					"$(PROJECT_DIR)",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Pull-Notch-Info.plist";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "macの各種アクティビティを監視し島に反映するために必要です";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Apple Musicで現在再生中の曲を表示するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "現在地から天気を取得するのに必要です";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
