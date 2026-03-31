@@ -83,16 +83,16 @@ jobs:
               run: |
                   echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
 
-            - name: Select Xcode
-              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-              uses: maxim-lobanov/setup-xcode@v1
-              with:
-                  xcode-version: latest-stable
+      - name: Select Xcode
+        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
-            - name: Build release app
-              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
-              shell: bash
-              run: |
+      - name: Build release app
+        if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+        shell: bash
+        run: |
                   set -euo pipefail
 
                   xcodebuild \
