@@ -30,6 +30,83 @@ struct Pull_NotchApp: App {
     }
 }
 
+private extension NSColor {
+    func withSaturation(multiplier: CGFloat) -> NSColor {
+        guard let converted = usingColorSpace(.deviceRGB) else { return self }
+
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+
+        return NSColor(
+            calibratedHue: hue,
+            saturation: min(1, saturation * multiplier),
+            brightness: brightness,
+            alpha: alpha
+        )
+    }
+
+    func withBrightness(multiplier: CGFloat) -> NSColor {
+        guard let converted = usingColorSpace(.deviceRGB) else { return self }
+
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+
+        return NSColor(
+            calibratedHue: hue,
+            saturation: saturation,
+            brightness: min(1, max(0, brightness * multiplier)),
+            alpha: alpha
+        )
+    }
+
+    var rgbComponents: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)? {
+        guard let converted = usingColorSpace(.deviceRGB) else { return nil }
+
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        converted.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return (red, green, blue, alpha)
+    }
+
+    var hsbComponents: (hue: CGFloat, saturation: CGFloat, brightness: CGFloat, alpha: CGFloat)? {
+        guard let converted = usingColorSpace(.deviceRGB) else { return nil }
+
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return (hue, saturation, brightness, alpha)
+    }
+
+    func distance(to other: NSColor) -> CGFloat {
+        guard
+            let lhs = rgbComponents,
+            let rhs = other.rgbComponents
+        else {
+            return 0
+        }
+
+        let red = lhs.red - rhs.red
+        let green = lhs.green - rhs.green
+        let blue = lhs.blue - rhs.blue
+        return sqrt((red * red) + (green * green) + (blue * blue))
+    }
+}
+
+private struct ArtworkPalette {
+    let mainColor: NSColor
+    let subColor: NSColor
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayWindow: NotchPanel?
     private var settingsWindow: SettingsPanel?
@@ -810,6 +887,8 @@ final class NotchOverlayModel {
     private(set) var volumeOutputDeviceName: String?
     private(set) var sourceApp: String?
     private(set) var artworkData: Data?
+    private(set) var visualizerBrightColor: Color = .white.opacity(0.92)
+    private(set) var visualizerDarkColor: Color = .white.opacity(0.6)
     private(set) var syncedLyrics: [SyncedLyricLine] = []
     private(set) var plainLyricsText: String?
     private(set) var lyricsLoadState: LyricsLoadState = .idle
@@ -833,7 +912,7 @@ final class NotchOverlayModel {
     private(set) var nowPlayingShowsVisualizer = true
     private(set) var nowPlayingAnimatesVisualizer = true
     private(set) var nowPlayingVisualizerMode: NowPlayingVisualizerMode = .fake
-    private(set) var liveVisualizerHeights: [CGFloat] = Array(repeating: 5, count: 5)
+    private(set) var liveVisualizerHeights: [CGFloat] = Array(repeating: 5, count: 6)
     private(set) var realVisualizerIsAvailable = false
     private(set) var launchAtLoginEnabled = false
     private(set) var launchAtLoginStatusText = "ログイン時には起動しません。"
@@ -1147,6 +1226,7 @@ final class NotchOverlayModel {
         detailLine = presentation.detailLine
         sourceApp = presentation.sourceApp
         artworkData = presentation.artworkData
+        updateVisualizerPalette(from: presentation.artworkData)
         isPlaying = presentation.isPlaying
 
         if revealChange {
@@ -1194,6 +1274,7 @@ final class NotchOverlayModel {
         detailLine = nil
         sourceApp = nil
         artworkData = nil
+        resetVisualizerPalette()
         nowPlayingDurationSeconds = nil
         nowPlayingPlaybackPositionSeconds = 0
         nowPlayingPlaybackPositionUpdatedAt = nil
@@ -1383,7 +1464,7 @@ final class NotchOverlayModel {
         nowPlayingVisualizerMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Self.nowPlayingVisualizerModeKey)
         if mode == .fake {
-            updateLiveVisualizerLevels(Array(repeating: 5, count: 5), isAvailable: false)
+            updateLiveVisualizerLevels(Array(repeating: 5, count: 6), isAvailable: false)
         }
         visualizerModeChangeHandler?(mode)
     }
@@ -1400,7 +1481,7 @@ final class NotchOverlayModel {
                 }
             }
         } else {
-            liveVisualizerHeights = Array(repeating: 5, count: 5)
+            liveVisualizerHeights = Array(repeating: 5, count: 6)
         }
     }
 
@@ -1969,6 +2050,128 @@ final class NotchOverlayModel {
             return max(0, position)
         }
         return min(max(0, position), duration)
+    }
+
+    private func updateVisualizerPalette(from artworkData: Data?) {
+        guard
+            let artworkData,
+            let palette = artworkPalette(from: artworkData)
+        else {
+            resetVisualizerPalette()
+            return
+        }
+
+        let brightColor = palette.mainColor
+            .withSaturation(multiplier: 1.18)
+            .withBrightness(multiplier: 1.08)
+        let darkColor = palette.subColor
+            .withSaturation(multiplier: 1.12)
+            .withBrightness(multiplier: 0.9)
+
+        visualizerBrightColor = Color(nsColor: brightColor.withAlphaComponent(0.98))
+        visualizerDarkColor = Color(nsColor: darkColor.withAlphaComponent(0.9))
+    }
+
+    private func resetVisualizerPalette() {
+        visualizerBrightColor = .white.opacity(0.92)
+        visualizerDarkColor = .white.opacity(0.6)
+    }
+
+    private func artworkPalette(from artworkData: Data) -> ArtworkPalette? {
+        guard
+            let image = NSImage(data: artworkData),
+            let tiffData = image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: tiffData)
+        else {
+            return nil
+        }
+
+        let sampleSize = 28
+        guard
+            let reduced = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: sampleSize,
+                pixelsHigh: sampleSize,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            )
+        else {
+            return nil
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        if let context = NSGraphicsContext(bitmapImageRep: reduced) {
+            NSGraphicsContext.current = context
+            context.imageInterpolation = .medium
+            image.draw(in: NSRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+            context.flushGraphics()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        struct Bucket {
+            var count: Int = 0
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var prominence: CGFloat = 0
+        }
+
+        var buckets: [String: Bucket] = [:]
+
+        for y in 0..<sampleSize {
+            for x in 0..<sampleSize {
+                guard let color = reduced.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                guard let rgb = color.rgbComponents, let hsb = color.hsbComponents else { continue }
+                guard rgb.alpha > 0.2 else { continue }
+                guard hsb.brightness > 0.12 else { continue }
+
+                let redKey = Int((rgb.red * 255).rounded()) / 32
+                let greenKey = Int((rgb.green * 255).rounded()) / 32
+                let blueKey = Int((rgb.blue * 255).rounded()) / 32
+                let key = "\(redKey)-\(greenKey)-\(blueKey)"
+
+                var bucket = buckets[key] ?? Bucket()
+                bucket.count += 1
+                bucket.red += rgb.red
+                bucket.green += rgb.green
+                bucket.blue += rgb.blue
+                bucket.prominence += (hsb.saturation * 1.9) + (hsb.brightness * 1.1)
+                buckets[key] = bucket
+            }
+        }
+
+        let rankedColors = buckets.values.compactMap { bucket -> (color: NSColor, score: CGFloat)? in
+            guard bucket.count > 0 else { return nil }
+
+            let averagedColor = NSColor(
+                calibratedRed: bucket.red / CGFloat(bucket.count),
+                green: bucket.green / CGFloat(bucket.count),
+                blue: bucket.blue / CGFloat(bucket.count),
+                alpha: 1
+            )
+
+            guard let hsb = averagedColor.hsbComponents else { return nil }
+            let score =
+                bucket.prominence
+                + (CGFloat(bucket.count) * 0.95)
+                + (hsb.saturation * 18)
+                + (hsb.brightness * 10)
+            return (averagedColor, score)
+        }
+        .sorted { $0.score > $1.score }
+
+        guard let mainColor = rankedColors.first?.color else { return nil }
+
+        let subColor = rankedColors.first(where: { candidate in
+            candidate.color.distance(to: mainColor) > 0.24
+        })?.color ?? mainColor
+
+        return ArtworkPalette(mainColor: mainColor, subColor: subColor)
     }
 
     private func extendVolumeOverlayVisibility(by duration: TimeInterval) {

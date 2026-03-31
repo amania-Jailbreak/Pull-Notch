@@ -1,3 +1,4 @@
+import Accelerate
 import AVFAudio
 import CoreAudio
 import CoreGraphics
@@ -101,8 +102,26 @@ private enum AppleMusicPollResult {
 }
 
 final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
+    private static let visualizerBandRanges: [ClosedRange<Float>] = {
+        [
+            40...120,
+            120...280,
+            280...640,
+            640...1_600,
+            1_600...4_800,
+            4_800...14_000
+        ]
+    }()
+    private static let fftSize = 2048
+    private static let fftLog2n = vDSP_Length(log2(Float(fftSize)))
     private weak var overlayModel: NotchOverlayModel?
     private let sampleHandlerQueue = DispatchQueue(label: "jp.amania.Pull-Notch.visualizer-audio")
+    private let fftSetup = vDSP_create_fftsetup(vDSP_Length(log2(Float(fftSize))), FFTRadix(kFFTRadix2))
+    private lazy var fftWindow: [Float] = {
+        var window = [Float](repeating: 0, count: Self.fftSize)
+        vDSP_hann_window(&window, vDSP_Length(Self.fftSize), Int32(vDSP_HANN_NORM))
+        return window
+    }()
     private var stream: SCStream?
     private var mode: NowPlayingVisualizerMode = .fake
 
@@ -226,112 +245,162 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
         from audioBufferList: UnsafePointer<AudioBufferList>,
         streamDescription: AudioStreamBasicDescription
     ) -> [CGFloat] {
+        guard
+            let monoSamples = monoSamples(from: audioBufferList, streamDescription: streamDescription),
+            let fftSetup
+        else {
+            return Self.restingLevels
+        }
+
+        let bandCount = Self.visualizerBandRanges.count
+        let bucketWeights: [CGFloat] = [0.62, 0.76, 1.8, 2.08, 2.04, 1.12]
+        let timePhase = CGFloat(Date().timeIntervalSinceReferenceDate)
+        let frequencyBandPeaks = fftBandPeaks(
+            from: monoSamples,
+            sampleRate: Float(streamDescription.mSampleRate),
+            setup: fftSetup
+        )
+        let weightedEnergies = (0..<bandCount).map { index in
+            min(1, frequencyBandPeaks[index] * bucketWeights[index])
+        }
+
+        return (0..<bandCount).map { index in
+            let peak = frequencyBandPeaks[index]
+            let weighted = weightedEnergies[index]
+            let target = pow(min(1, weighted), 1.3)
+            let flutter = max(0, sin((timePhase * 10.5) + CGFloat(index) * 0.92)) * target * 0.05
+            let dynamicLift = peak > 0.82 ? min(0.05, (peak - 0.82) * 0.16) : 0
+            return 5 + (min(1, target + flutter + dynamicLift) * 10.5)
+        }
+    }
+
+    private func monoSamples(
+        from audioBufferList: UnsafePointer<AudioBufferList>,
+        streamDescription: AudioStreamBasicDescription
+    ) -> [Float]? {
         let buffers = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer<AudioBufferList>(mutating: audioBufferList)
         )
-        let bucketCount = 5
-        var bucketLevels = Array(repeating: CGFloat(0), count: bucketCount)
-        var bucketSamples = Array(repeating: 0, count: bucketCount)
-        var bucketPeaks = Array(repeating: CGFloat(0), count: bucketCount)
-
-        let bytesPerFrame = max(Int(streamDescription.mBytesPerFrame), 1)
         let usesFloat = (streamDescription.mFormatFlags & kAudioFormatFlagIsFloat) != 0
         let bytesPerSample = max(Int(streamDescription.mBitsPerChannel / 8), 1)
 
-        for audioBuffer in buffers {
-            guard let mData = audioBuffer.mData else { continue }
-            let frameCount = max(Int(audioBuffer.mDataByteSize) / bytesPerFrame, 1)
+        if buffers.count > 1 {
+            let perBufferSamples: [[Float]] = buffers.compactMap { audioBuffer in
+                guard let mData = audioBuffer.mData else { return nil }
 
-            if usesFloat && bytesPerSample == MemoryLayout<Float>.size {
-                let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
-                let samples = UnsafeRawPointer(mData).bindMemory(to: Float.self, capacity: sampleCount)
-                accumulateLevels(
-                    sampleCount: sampleCount,
-                    bucketCount: bucketCount,
-                    bucketLevels: &bucketLevels,
-                    bucketSamples: &bucketSamples,
-                    bucketPeaks: &bucketPeaks
-                ) { index in
-                    min(1, CGFloat(abs(samples[index])))
+                if usesFloat && bytesPerSample == MemoryLayout<Float>.size {
+                    let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
+                    let samples = UnsafeRawPointer(mData).bindMemory(to: Float.self, capacity: sampleCount)
+                    return Array(UnsafeBufferPointer(start: samples, count: sampleCount))
                 }
-            } else if bytesPerSample == MemoryLayout<Int16>.size {
-                let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
-                let samples = UnsafeRawPointer(mData).bindMemory(to: Int16.self, capacity: sampleCount)
-                let normalizer = CGFloat(Int16.max)
-                accumulateLevels(
-                    sampleCount: sampleCount,
-                    bucketCount: bucketCount,
-                    bucketLevels: &bucketLevels,
-                    bucketSamples: &bucketSamples,
-                    bucketPeaks: &bucketPeaks
-                ) { index in
-                    min(1, CGFloat(abs(Int(samples[index]))) / normalizer)
+
+                if bytesPerSample == MemoryLayout<Int16>.size {
+                    let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
+                    let normalizer = Float(Int16.max)
+                    let samples = UnsafeRawPointer(mData).bindMemory(to: Int16.self, capacity: sampleCount)
+                    return (0..<sampleCount).map { Float(samples[$0]) / normalizer }
                 }
-            } else {
-                accumulateLevels(
-                    sampleCount: frameCount,
-                    bucketCount: bucketCount,
-                    bucketLevels: &bucketLevels,
-                    bucketSamples: &bucketSamples,
-                    bucketPeaks: &bucketPeaks
-                ) { _ in
-                    0
+
+                return nil
+            }
+
+            guard let frameCount = perBufferSamples.map(\.count).min(), frameCount > 0 else {
+                return nil
+            }
+
+            return (0..<frameCount).map { frameIndex in
+                let sum = perBufferSamples.reduce(Float(0)) { partial, channelSamples in
+                    partial + channelSamples[frameIndex]
                 }
+                return sum / Float(perBufferSamples.count)
             }
         }
 
-        let bucketWeights: [CGFloat] = [0.9, 1.05, 1.18, 1.03, 0.88]
-        let timePhase = CGFloat(Date().timeIntervalSinceReferenceDate)
+        guard let firstBuffer = buffers.first, let mData = firstBuffer.mData else {
+            return nil
+        }
 
-        return (0..<bucketCount).map { index in
-            let sum = bucketLevels[index]
-            let count = bucketSamples[index]
-            let peak = bucketPeaks[index]
-            let average = count > 0 ? sum / CGFloat(count) : 0
-            let rmsLike = sqrt(average)
-            let energy = min(1, (rmsLike * 0.9) + (peak * 0.56))
-            let weighted = min(1, energy * bucketWeights[index])
-            let accelerated = acceleratedVisualizerEnergy(weighted)
-            let flutter = max(0, sin((timePhase * 9.5) + CGFloat(index) * 0.85)) * accelerated * 0.18
-            let dynamicLift = peak > 0.72 ? min(0.16, (peak - 0.72) * 0.55) : 0
-            return 5 + (min(1, accelerated + flutter + dynamicLift) * 14.5)
+        let channelCount = max(Int(streamDescription.mChannelsPerFrame), 1)
+
+        if usesFloat && bytesPerSample == MemoryLayout<Float>.size {
+            let sampleCount = Int(firstBuffer.mDataByteSize) / MemoryLayout<Float>.size
+            let frameCount = sampleCount / channelCount
+            let samples = UnsafeRawPointer(mData).bindMemory(to: Float.self, capacity: sampleCount)
+            return (0..<frameCount).map { frameIndex in
+                let channelOffset = frameIndex * channelCount
+                let sum = (0..<channelCount).reduce(Float(0)) { partial, channel in
+                    partial + samples[channelOffset + channel]
+                }
+                return sum / Float(channelCount)
+            }
+        }
+
+        if bytesPerSample == MemoryLayout<Int16>.size {
+            let sampleCount = Int(firstBuffer.mDataByteSize) / MemoryLayout<Int16>.size
+            let frameCount = sampleCount / channelCount
+            let normalizer = Float(Int16.max)
+            let samples = UnsafeRawPointer(mData).bindMemory(to: Int16.self, capacity: sampleCount)
+            return (0..<frameCount).map { frameIndex in
+                let channelOffset = frameIndex * channelCount
+                let sum = (0..<channelCount).reduce(Float(0)) { partial, channel in
+                    partial + (Float(samples[channelOffset + channel]) / normalizer)
+                }
+                return sum / Float(channelCount)
+            }
+        }
+
+        return nil
+    }
+
+    private func fftBandPeaks(from monoSamples: [Float], sampleRate: Float, setup: FFTSetup) -> [CGFloat] {
+        let fftSize = Self.fftSize
+        var paddedSamples = [Float](repeating: 0, count: fftSize)
+        let sampleSlice = monoSamples.suffix(fftSize)
+        let startIndex = fftSize - sampleSlice.count
+        paddedSamples.replaceSubrange(startIndex..<fftSize, with: sampleSlice)
+        vDSP_vmul(paddedSamples, 1, fftWindow, 1, &paddedSamples, 1, vDSP_Length(fftSize))
+
+        var splitReal = [Float](repeating: 0, count: fftSize / 2)
+        var splitImag = [Float](repeating: 0, count: fftSize / 2)
+
+        splitReal.withUnsafeMutableBufferPointer { realBuffer in
+            splitImag.withUnsafeMutableBufferPointer { imagBuffer in
+                var splitComplex = DSPSplitComplex(realp: realBuffer.baseAddress!, imagp: imagBuffer.baseAddress!)
+                paddedSamples.withUnsafeMutableBufferPointer { sampleBuffer in
+                    sampleBuffer.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: fftSize / 2) { complexPointer in
+                        vDSP_ctoz(complexPointer, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
+                    }
+                }
+                vDSP_fft_zrip(setup, &splitComplex, 1, Self.fftLog2n, FFTDirection(FFT_FORWARD))
+            }
+        }
+
+        var magnitudes = [Float](repeating: 0, count: fftSize / 2)
+        splitReal.withUnsafeMutableBufferPointer { realBuffer in
+            splitImag.withUnsafeMutableBufferPointer { imagBuffer in
+                var splitComplex = DSPSplitComplex(realp: realBuffer.baseAddress!, imagp: imagBuffer.baseAddress!)
+                vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+            }
+        }
+
+        var normalizedMagnitudes = [Float](repeating: 0, count: magnitudes.count)
+        var scale = Float(1.0 / Float(fftSize))
+        vDSP_vsmul(magnitudes, 1, &scale, &normalizedMagnitudes, 1, vDSP_Length(magnitudes.count))
+
+        return Self.visualizerBandRanges.map { range in
+            let matchingBins = normalizedMagnitudes.enumerated().compactMap { index, magnitude -> Float? in
+                let frequency = (Float(index) * sampleRate) / Float(fftSize)
+                guard range.contains(frequency) else { return nil }
+                return magnitude
+            }
+
+            let peak = matchingBins.max() ?? 0
+            let normalizedPeak = min(1, log10f(1 + (peak * 8)) / 1.5)
+            return CGFloat(normalizedPeak)
         }
     }
 
-    private func acceleratedVisualizerEnergy(_ energy: CGFloat) -> CGFloat {
-        let clamped = min(max(energy, 0), 1)
-        let threshold: CGFloat = 0.34
-
-        guard clamped > threshold else {
-            return pow(clamped, 1.35) * 0.78
-        }
-
-        let base = pow(threshold, 1.35) * 0.78
-        let acceleratedPortion = (clamped - threshold) / (1 - threshold)
-        let curve = pow(acceleratedPortion, 0.58)
-        return min(1, base + (curve * (1 - base)))
-    }
-
-    private func accumulateLevels(
-        sampleCount: Int,
-        bucketCount: Int,
-        bucketLevels: inout [CGFloat],
-        bucketSamples: inout [Int],
-        bucketPeaks: inout [CGFloat],
-        valueAtIndex: (Int) -> CGFloat
-    ) {
-        guard sampleCount > 0 else { return }
-
-        for index in 0..<sampleCount {
-            let bucketIndex = min(bucketCount - 1, (index * bucketCount) / sampleCount)
-            let value = valueAtIndex(index)
-            bucketLevels[bucketIndex] += value
-            bucketSamples[bucketIndex] += 1
-            bucketPeaks[bucketIndex] = max(bucketPeaks[bucketIndex], value)
-        }
-    }
-
-    private static let restingLevels = Array(repeating: CGFloat(5), count: 5)
+    private static let restingLevels = Array(repeating: CGFloat(5), count: 6)
 }
 
 @MainActor

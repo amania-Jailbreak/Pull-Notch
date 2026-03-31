@@ -14,7 +14,7 @@ struct ContentView: View {
     @Bindable var overlayModel: NotchOverlayModel
     @State private var isHovering = false
     @State private var isDropTargeted = false
-    @State private var visualizerHeights: [CGFloat] = [8, 14, 10, 16, 7]
+    @State private var visualizerHeights: [CGFloat] = [8, 13, 10, 16, 12, 7]
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -258,7 +258,7 @@ struct ContentView: View {
         return HStack(alignment: .center, spacing: 3) {
             ForEach(Array(barHeights.enumerated()), id: \.offset) { index, height in
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(index.isMultiple(of: 2) ? Color.white.opacity(0.92) : Color.white.opacity(0.6))
+                    .fill(visualizerBarColor(at: index, total: barHeights.count))
                     .frame(width: 2.5, height: isActive ? height : 5)
                     .animation(
                         .easeInOut(duration: 0.22).delay(Double(index) * 0.03),
@@ -269,15 +269,56 @@ struct ContentView: View {
         .frame(height: 24)
         .task(id: "\(isActive)-\(overlayModel.usesRealNowPlayingVisualizer)") {
             guard isActive, !overlayModel.usesRealNowPlayingVisualizer else {
-                visualizerHeights = [5, 5, 5, 5, 5]
+                visualizerHeights = [5, 5, 5, 5, 5, 5]
                 return
             }
 
             while isActive && !overlayModel.usesRealNowPlayingVisualizer {
-                visualizerHeights = (0..<5).map { _ in .random(in: 7...20) }
+                visualizerHeights = (0..<6).map { _ in .random(in: 7...21) }
                 try? await Task.sleep(for: .milliseconds(180))
             }
         }
+    }
+
+    private func visualizerBarColor(at index: Int, total: Int) -> Color {
+        guard total > 1 else { return overlayModel.visualizerBrightColor }
+
+        let progress = CGFloat(index) / CGFloat(total - 1)
+        let start = NSColor(overlayModel.visualizerBrightColor)
+        let end = NSColor(overlayModel.visualizerDarkColor)
+
+        guard
+            let startRGB = start.usingColorSpace(.deviceRGB),
+            let endRGB = end.usingColorSpace(.deviceRGB)
+        else {
+            return progress < 0.5 ? overlayModel.visualizerBrightColor : overlayModel.visualizerDarkColor
+        }
+
+        var startRed: CGFloat = 0
+        var startGreen: CGFloat = 0
+        var startBlue: CGFloat = 0
+        var startAlpha: CGFloat = 0
+        startRGB.getRed(&startRed, green: &startGreen, blue: &startBlue, alpha: &startAlpha)
+
+        var endRed: CGFloat = 0
+        var endGreen: CGFloat = 0
+        var endBlue: CGFloat = 0
+        var endAlpha: CGFloat = 0
+        endRGB.getRed(&endRed, green: &endGreen, blue: &endBlue, alpha: &endAlpha)
+
+        let red = startRed + ((endRed - startRed) * progress)
+        let green = startGreen + ((endGreen - startGreen) * progress)
+        let blue = startBlue + ((endBlue - startBlue) * progress)
+        let alpha = startAlpha + ((endAlpha - startAlpha) * progress)
+
+        return Color(
+            nsColor: NSColor(
+                calibratedRed: red,
+                green: green,
+                blue: blue,
+                alpha: alpha
+            )
+        )
     }
 
     @ViewBuilder

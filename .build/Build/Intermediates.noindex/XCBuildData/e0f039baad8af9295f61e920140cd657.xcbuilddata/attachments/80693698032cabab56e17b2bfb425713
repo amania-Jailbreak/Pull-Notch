@@ -1,0 +1,129 @@
+{
+  "" : {
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull Notch-primary.dia",
+    "emit-module-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull Notch-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull Notch-primary-emit-module.dia",
+    "pch" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull Notch-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull Notch-primary.swiftdeps"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/ContentView.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ContentView~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Infrastructure/LyricsService.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/LyricsService~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Infrastructure/MediaRemoteAdapterBridge.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/MediaRemoteAdapterBridge~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Models/IslandModels.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/IslandModels~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Monitors/SystemMonitors.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/SystemMonitors~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Pull_NotchApp.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/Pull_NotchApp~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Visualizer/AudioAnalyzer.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/AudioAnalyzer~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Visualizer/DynamicIslandVisualizer.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/DynamicIslandVisualizer~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Visualizer/ReactiveWaveform.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/ReactiveWaveform~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Visualizer/VisualizerDemoView.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerDemoView~partial.swiftmodule"
+  },
+  "/Users/amania/Documents/Programs/Pull Notch/Pull Notch/Visualizer/VisualizerMetrics.swift" : {
+    "const-values" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.swiftconstvalues",
+    "dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.d",
+    "diagnostics" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.dia",
+    "index-unit-output-path" : "/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.o",
+    "llvm-bc" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.bc",
+    "object" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.o",
+    "swift-dependencies" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics.swiftdeps",
+    "swiftmodule" : "/Users/amania/Documents/Programs/Pull Notch/.build/Build/Intermediates.noindex/Pull Notch.build/Debug/Pull Notch.build/Objects-normal/arm64/VisualizerMetrics~partial.swiftmodule"
+  }
+}
