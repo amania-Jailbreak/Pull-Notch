@@ -92,9 +92,18 @@ jobs:
               with:
                   xcode-version: 26.4
 
-            - name: Build release app
+            - name: Import code-signing certificate
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              uses: apple-actions/import-codesign-certs@v5
+              with:
+                  p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+                  p12-password: ${{ secrets.P12_PASSWORD }}
+
+            - name: Archive signed app
               if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
               shell: bash
+              env:
+                  DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
               run: |
                   set -euo pipefail
 
@@ -102,10 +111,10 @@ jobs:
                     -project "Pull Notch.xcodeproj" \
                     -scheme "Pull Notch" \
                     -configuration Release \
-                    -derivedDataPath DerivedData \
-                    CODE_SIGNING_ALLOWED=NO \
-                    CODE_SIGNING_REQUIRED=NO \
-                    build
+                    -archivePath "$RUNNER_TEMP/PullNotch.xcarchive" \
+                    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+                    CODE_SIGN_IDENTITY="Developer ID Application" \
+                    archive
 
             - name: Create DMG
               if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
@@ -114,7 +123,7 @@ jobs:
               run: |
                   set -euo pipefail
 
-                  app_path="DerivedData/Build/Products/Release/Pull Notch.app"
+                  app_path="$RUNNER_TEMP/PullNotch.xcarchive/Products/Applications/Pull Notch.app"
                   if [[ ! -d "$app_path" ]]; then
                     echo "Built app not found at $app_path" >&2
                     exit 1
@@ -144,7 +153,7 @@ jobs:
               run: |
                   set -euo pipefail
 
-                  framework_path="DerivedData/Build/Products/Release/PullNotchPluginKit.framework"
+                  framework_path="$RUNNER_TEMP/PullNotch.xcarchive/Products/Library/Frameworks/PullNotchPluginKit.framework"
                   if [[ ! -d "$framework_path" ]]; then
                     echo "Built framework not found at $framework_path" >&2
                     exit 1
