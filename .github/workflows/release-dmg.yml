@@ -22,7 +22,7 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Detect release version change
+            - name: Detect release version or build change
               id: version
               shell: bash
               run: |
@@ -30,36 +30,41 @@ jobs:
 
                   project_file="Pull Notch.xcodeproj/project.pbxproj"
                   current_version="$(grep -m 1 'MARKETING_VERSION = ' "$project_file" | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/')"
+                  current_build="$(grep -m 1 'CURRENT_PROJECT_VERSION = ' "$project_file" | sed -E 's/.*CURRENT_PROJECT_VERSION = ([^;]+);/\1/')"
 
-                  if [[ -z "$current_version" ]]; then
-                    echo "Could not determine MARKETING_VERSION from $project_file" >&2
+                  if [[ -z "$current_version" || -z "$current_build" ]]; then
+                    echo "Could not determine MARKETING_VERSION or CURRENT_PROJECT_VERSION from $project_file" >&2
                     exit 1
                   fi
 
                   previous_version=""
+                  previous_build=""
                   if [[ "${{ github.event_name }}" == "push" ]] && git cat-file -e "${{ github.event.before }}:$project_file" 2>/dev/null; then
                     previous_version="$(git show "${{ github.event.before }}:$project_file" | grep -m 1 'MARKETING_VERSION = ' | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/' || true)"
+                    previous_build="$(git show "${{ github.event.before }}:$project_file" | grep -m 1 'CURRENT_PROJECT_VERSION = ' | sed -E 's/.*CURRENT_PROJECT_VERSION = ([^;]+);/\1/' || true)"
                   fi
 
                   if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
                     version_changed="true"
-                  elif [[ -n "$previous_version" && "$previous_version" != "$current_version" ]]; then
+                  elif [[ -n "$previous_version" && -n "$previous_build" ]] && [[ "$previous_version" != "$current_version" || "$previous_build" != "$current_build" ]]; then
                     version_changed="true"
                   else
                     version_changed="false"
                   fi
 
-                  tag_name="v$current_version"
+                  tag_name="v${current_version}-build-${current_build}"
 
                   echo "current=$current_version" >> "$GITHUB_OUTPUT"
+                  echo "current_build=$current_build" >> "$GITHUB_OUTPUT"
                   echo "previous=$previous_version" >> "$GITHUB_OUTPUT"
+                  echo "previous_build=$previous_build" >> "$GITHUB_OUTPUT"
                   echo "changed=$version_changed" >> "$GITHUB_OUTPUT"
                   echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
 
-            - name: Stop when version did not change
+            - name: Stop when version and build did not change
               if: steps.version.outputs.changed != 'true'
               shell: bash
-              run: echo "MARKETING_VERSION did not change. Skipping DMG release."
+              run: echo "MARKETING_VERSION and CURRENT_PROJECT_VERSION did not change. Skipping release."
 
             - name: Ensure release tag does not already exist
               if: steps.version.outputs.changed == 'true'
@@ -119,7 +124,7 @@ jobs:
                   cp -R "$app_path" dist/dmg-root/
                   ln -s /Applications dist/dmg-root/Applications
 
-                  dmg_name="Pull-Notch-${{ steps.version.outputs.current }}.dmg"
+                  dmg_name="Pull-Notch-${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_build }}.dmg"
                   dmg_path="dist/$dmg_name"
 
                   hdiutil create \
@@ -131,6 +136,29 @@ jobs:
 
                   echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
                   echo "name=$dmg_name" >> "$GITHUB_OUTPUT"
+
+            - name: Package plugin framework
+              if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
+              id: plugin_framework
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  framework_path="DerivedData/Build/Products/Release/PullNotchPluginKit.framework"
+                  if [[ ! -d "$framework_path" ]]; then
+                    echo "Built framework not found at $framework_path" >&2
+                    exit 1
+                  fi
+
+                  framework_name="PullNotchPluginKit-${{ steps.version.outputs.current }}-${{ steps.version.outputs.current_build }}.zip"
+                  framework_zip_path="dist/$framework_name"
+
+                  ditto -c -k --sequesterRsrc --keepParent \
+                    "$framework_path" \
+                    "$framework_zip_path"
+
+                  echo "path=$framework_zip_path" >> "$GITHUB_OUTPUT"
+                  echo "name=$framework_name" >> "$GITHUB_OUTPUT"
 
             - name: Generate release notes
               if: steps.version.outputs.changed == 'true' && steps.existing_release.outputs.exists != 'true'
@@ -162,10 +190,11 @@ jobs:
               run: |
                   set -euo pipefail
 
-                  release_title="Pull Notch ${{ steps.version.outputs.current }}"
+                  release_title="Pull Notch ${{ steps.version.outputs.current }} - ${{ steps.version.outputs.current_build }}"
 
                   gh release create "${{ steps.version.outputs.tag }}" \
                     "${{ steps.dmg.outputs.path }}" \
+                    "${{ steps.plugin_framework.outputs.path }}" \
                     --target "${{ github.sha }}" \
                     --title "$release_title" \
                     --notes-file "${{ steps.notes.outputs.file }}"
