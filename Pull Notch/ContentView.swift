@@ -183,6 +183,9 @@ struct ContentView: View {
                 labeledWidget(systemName: systemName, text: text)
             case .circularProgress(let systemName, let progress, let isActive, let text):
                 circularProgressWidget(systemName: systemName, progress: progress, isActive: isActive, text: text)
+            case .custom(let render):
+                render()
+                    .frame(width: widget.preferredWidth, height: overlayModel.notchHeight)
             }
         } else {
             Color.clear
@@ -353,6 +356,10 @@ struct ContentView: View {
             volumeBanner
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
+        } else if overlayModel.showsPluginStatus {
+            pluginStatusBanner
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
         } else if overlayModel.showsBatteryLowWarning {
             batteryWarningBanner
                 .padding(.horizontal, 14)
@@ -534,8 +541,17 @@ struct ContentView: View {
     private var activeExpandedPageBody: some View {
         if overlayModel.expandedWidgetPages.isEmpty {
             emptyExpandedPanel
-        } else if overlayModel.activeExpandedWidgetPage == .nowPlaying {
+        } else if overlayModel.activeExpandedBuiltInPage == .nowPlaying {
             nowPlayingPlayerPanel
+        } else if let activeExpandedWidgetPage = overlayModel.activeExpandedWidgetPage,
+                  case .plugin = activeExpandedWidgetPage.source,
+                  let render = activeExpandedWidgetPage.render {
+            VStack(alignment: .leading, spacing: 12) {
+                expandedPageHeader
+                render()
+            }
+            .padding(.top, 60)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 expandedPageHeader
@@ -548,6 +564,29 @@ struct ContentView: View {
 
     private var activeExpandedPageID: String {
         overlayModel.activeExpandedWidgetPage?.id ?? "empty-expanded-page"
+    }
+
+    private var pluginStatusBanner: some View {
+        Group {
+            if let pluginStatusMessage = overlayModel.pluginStatusMessage {
+                MarqueeText(
+                    text: pluginStatusMessage,
+                    font: .system(size: 12, weight: .semibold),
+                    color: .white.opacity(0.9)
+                )
+                .frame(width: overlayModel.visibleWidth - 28, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.black)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                        )
+                )
+            }
+        }
     }
 
     private var nowPlayingPlayerPanel: some View {
@@ -751,7 +790,7 @@ struct ContentView: View {
                 HStack(spacing: 5) {
                     ForEach(overlayModel.expandedWidgetPages) { page in
                         Circle()
-                            .fill(page == overlayModel.activeExpandedWidgetPage ? Color.white.opacity(0.9) : Color.white.opacity(0.24))
+                            .fill(page.id == overlayModel.activeExpandedWidgetPage?.id ? Color.white.opacity(0.9) : Color.white.opacity(0.24))
                             .frame(width: 5, height: 5)
                     }
                 }
@@ -774,8 +813,8 @@ struct ContentView: View {
             HStack(spacing: 4) {
                 ForEach(overlayModel.expandedWidgetPages) { page in
                     Capsule(style: .continuous)
-                        .fill(page == overlayModel.activeExpandedWidgetPage ? Color.white.opacity(0.88) : Color.white.opacity(0.18))
-                        .frame(width: page == overlayModel.activeExpandedWidgetPage ? 12 : 4, height: 4)
+                        .fill(page.id == overlayModel.activeExpandedWidgetPage?.id ? Color.white.opacity(0.88) : Color.white.opacity(0.18))
+                        .frame(width: page.id == overlayModel.activeExpandedWidgetPage?.id ? 12 : 4, height: 4)
                 }
             }
 
@@ -789,14 +828,19 @@ struct ContentView: View {
     @ViewBuilder
     private var expandedPageContent: some View {
         switch overlayModel.activeExpandedWidgetPage {
-        case .nowPlaying:
-            nowPlayingExpandedPage
-        case .pinnedFile:
-            pinnedFileExpandedPage
-        case .weather:
-            weatherExpandedPage
-        case .pomodoro:
-            pomodoroExpandedPage
+        case let descriptor?:
+            switch descriptor.source {
+            case .builtIn(.nowPlaying):
+                nowPlayingExpandedPage
+            case .builtIn(.pinnedFile):
+                pinnedFileExpandedPage
+            case .builtIn(.weather):
+                weatherExpandedPage
+            case .builtIn(.pomodoro):
+                pomodoroExpandedPage
+            case .plugin:
+                EmptyView()
+            }
         case nil:
             EmptyView()
         }
@@ -805,7 +849,7 @@ struct ContentView: View {
     private var canMoveExpandedPageBackward: Bool {
         guard
             let currentPage = overlayModel.activeExpandedWidgetPage,
-            let index = overlayModel.expandedWidgetPages.firstIndex(of: currentPage)
+            let index = overlayModel.expandedWidgetPages.firstIndex(where: { $0.id == currentPage.id })
         else {
             return false
         }
@@ -816,7 +860,7 @@ struct ContentView: View {
     private var canMoveExpandedPageForward: Bool {
         guard
             let currentPage = overlayModel.activeExpandedWidgetPage,
-            let index = overlayModel.expandedWidgetPages.firstIndex(of: currentPage)
+            let index = overlayModel.expandedWidgetPages.firstIndex(where: { $0.id == currentPage.id })
         else {
             return false
         }

@@ -14,6 +14,7 @@ import CoreMedia
 import Foundation
 import IOKit.ps
 import Observation
+import PullNotchPluginKit
 import ScreenCaptureKit
 import ServiceManagement
 import SwiftUI
@@ -111,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayWindow: NotchPanel?
     private var settingsWindow: SettingsPanel?
     private let overlayModel = NotchOverlayModel()
+    private let pluginManager = PluginManager()
+    private let pluginBridgeServer = PluginBridgeServer.shared
     private let nowPlayingMonitor = AppleMusicNowPlayingMonitor()
     private let screenAudioMonitor = ScreenAudioVisualizerMonitor()
     private let volumeMonitor = SystemVolumeMonitor()
@@ -159,6 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         volumeMonitor.start(using: overlayModel)
         batteryMonitor.start(using: overlayModel)
         weatherMonitor.start(using: overlayModel)
+        pluginManager.start(using: overlayModel)
+        pluginBridgeServer.start(using: overlayModel)
     }
 
     @objc private func updateOverlayPosition() {
@@ -338,6 +343,7 @@ struct SettingsWindowView: View {
         case general
         case widgets
         case weather
+        case plugins
 
         var id: String { rawValue }
 
@@ -349,6 +355,8 @@ struct SettingsWindowView: View {
                 return "Widgets"
             case .weather:
                 return "Weather"
+            case .plugins:
+                return "Plugins"
             }
         }
     }
@@ -476,6 +484,11 @@ struct SettingsWindowView: View {
             case .weather:
                 LazyVStack(spacing: 14) {
                     weatherLocationSection
+                }
+                .padding(.vertical, 2)
+            case .plugins:
+                LazyVStack(spacing: 14) {
+                    pluginsSection
                 }
                 .padding(.vertical, 2)
             }
@@ -677,23 +690,23 @@ struct SettingsWindowView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.82))
 
-            ForEach(overlayModel.widgetKinds(for: placement)) { kind in
+            ForEach(overlayModel.widgetPriorityItems(for: placement)) { item in
                 HStack(spacing: 12) {
-                    Text(kind.title)
+                    Text(item.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
 
                     Spacer(minLength: 0)
 
                     priorityButton("chevron.up") {
-                        overlayModel.moveCompactWidget(kind, direction: .up)
+                        overlayModel.moveCompactWidget(item.identity, placement: placement, direction: .up)
                     }
-                    .disabled(!overlayModel.canMoveCompactWidget(kind, direction: .up))
+                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, placement: placement, direction: .up))
 
                     priorityButton("chevron.down") {
-                        overlayModel.moveCompactWidget(kind, direction: .down)
+                        overlayModel.moveCompactWidget(item.identity, placement: placement, direction: .down)
                     }
-                    .disabled(!overlayModel.canMoveCompactWidget(kind, direction: .down))
+                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, placement: placement, direction: .down))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -776,6 +789,8 @@ struct SettingsWindowView: View {
             return "square.grid.2x2.fill"
         case .weather:
             return "cloud.sun.fill"
+        case .plugins:
+            return "puzzlepiece.extension.fill"
         }
     }
 
@@ -787,6 +802,105 @@ struct SettingsWindowView: View {
             return "表示と優先順位"
         case .weather:
             return "地点と更新"
+        case .plugins:
+            return "拡張機能"
+        }
+    }
+
+    private var pluginsSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 14) {
+                sectionHeader(
+                    title: "Plugins",
+                    subtitle: "Application Support 内の bundle から読み込んだ plugin を管理します。"
+                )
+
+                if overlayModel.pluginRuntimeInfos.isEmpty {
+                    Text("有効な plugin はまだ見つかっていません。")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                } else {
+                    ForEach(overlayModel.pluginRuntimeInfos) { plugin in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(plugin.displayName)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.white)
+
+                                    Text("v\(plugin.version) • \(plugin.state.rawValue.capitalized)")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.48))
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Capsule()
+                                    .fill(plugin.state == .loaded ? Color.green.opacity(0.18) : Color.white.opacity(0.08))
+                                    .overlay {
+                                        Text(plugin.state == .loaded ? "Loaded" : plugin.state == .disabled ? "Disabled" : "Failed")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(plugin.state == .loaded ? Color.green.opacity(0.9) : .white.opacity(0.72))
+                                    }
+                                    .frame(width: 72, height: 24)
+                            }
+
+                            if let errorMessage = plugin.errorMessage {
+                                Text(errorMessage)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.red.opacity(0.9))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            settingsToggleButton(
+                                title: "Enabled",
+                                subtitle: plugin.bundlePath,
+                                isOn: plugin.state != .disabled
+                            ) {
+                                overlayModel.setPluginEnabled(plugin.id, isEnabled: plugin.state == .disabled)
+                            }
+
+                            let sections = overlayModel.pluginSettingsSections(for: plugin.id)
+                            ForEach(sections) { section in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(section.title)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.88))
+
+                                    if let subtitle = section.subtitle {
+                                        Text(subtitle)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(.white.opacity(0.46))
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+
+                                    section.render()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.05))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                                        )
+                                )
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                                )
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -870,6 +984,7 @@ final class NotchOverlayModel {
     private var pomodoroTimerTask: Task<Void, Never>?
     private var temporaryWidgetTasks: [CompactWidgetPlacement: Task<Void, Never>] = [:]
     private var lyricsTask: Task<Void, Never>?
+    private var pluginStatusTask: Task<Void, Never>?
     private let lyricsService = LyricsService()
 
     private(set) var currentPresentation: IslandPresentation?
@@ -896,6 +1011,10 @@ final class NotchOverlayModel {
     private(set) var currentLyricsRequestKey: String?
     private(set) var compactWidgets: [CompactIslandWidget] = []
     private(set) var temporaryCompactWidgets: [CompactWidgetPlacement: CompactIslandWidget] = [:]
+    private(set) var pluginWidgets: [PluginWidgetDescriptor] = []
+    private(set) var pluginExpandedPageDescriptors: [PluginExpandedPageDescriptor] = []
+    private(set) var pluginRuntimeInfos: [PluginRuntimeInfo] = []
+    private(set) var pluginSettingsSections: [PluginSettingsSectionDescriptor] = []
     private(set) var batteryLevel: Int?
     private(set) var batteryIsCharging = false
     private(set) var chargingPowerWatts: Double?
@@ -917,10 +1036,14 @@ final class NotchOverlayModel {
     private(set) var launchAtLoginEnabled = false
     private(set) var launchAtLoginStatusText = "ログイン時には起動しません。"
     private(set) var compactWidgetPriorities: [CompactWidgetKind: Int] = [:]
-    private(set) var currentExpandedPageKind: ExpandedWidgetPageKind?
+    private(set) var pluginStatusMessage: String?
+    private(set) var showsPluginStatus = false
+    private(set) var currentExpandedPageID: String?
     private(set) var expandedPageNavigationDirection: ExpandedPageNavigationDirection = .forward
     private(set) var expandedPanel: ExpandedIslandPanel?
     private(set) var featureStates: [OverlayFeature: Bool] = [:]
+    private var pluginEventHandlers: [UUID: @MainActor (PluginHostEvent) -> Void] = [:]
+    private weak var pluginManager: PluginManager?
     var mediaControlHandler: ((MediaControlCommand) -> Void)?
     var settingsWindowHandler: (() -> Void)?
     var weatherLocationUpdateHandler: ((String?) -> Void)?
@@ -1009,13 +1132,16 @@ final class NotchOverlayModel {
             return onboardingExpandedHeight
         }
         if expandedPanel == .musicPlayer {
-            return activeExpandedWidgetPage == .nowPlaying ? playerExpandedHeight : widgetExpandedHeight
+            return activeExpandedBuiltInPage == .nowPlaying ? playerExpandedHeight : widgetExpandedHeight
         }
         if showsBatteryLowWarning {
             return expandedHeight
         }
         if showsVolumeChange {
             return volumeExpandedHeight
+        }
+        if showsPluginStatus {
+            return expandedHeight
         }
         if showsHoverChange {
             return expandedHeight
@@ -1030,39 +1156,89 @@ final class NotchOverlayModel {
         )
     }
 
-    var expandedWidgetPages: [ExpandedWidgetPageKind] {
-        var pages: [ExpandedWidgetPageKind] = []
+    var expandedWidgetPages: [ExpandedPageDescriptor] {
+        var pages: [ExpandedPageDescriptor] = []
 
         if currentPresentation != nil {
-            pages.append(.nowPlaying)
+            pages.append(
+                ExpandedPageDescriptor(
+                    id: ExpandedWidgetPageKind.nowPlaying.id,
+                    title: ExpandedWidgetPageKind.nowPlaying.title,
+                    source: .builtIn(.nowPlaying),
+                    preferredWidth: nil,
+                    render: nil
+                )
+            )
         }
 
         if pinnedFileURL != nil, isFeatureEnabled(.pinnedFile) {
-            pages.append(.pinnedFile)
+            pages.append(
+                ExpandedPageDescriptor(
+                    id: ExpandedWidgetPageKind.pinnedFile.id,
+                    title: ExpandedWidgetPageKind.pinnedFile.title,
+                    source: .builtIn(.pinnedFile),
+                    preferredWidth: nil,
+                    render: nil
+                )
+            )
         }
 
         if weatherTemperatureText != nil, isFeatureEnabled(.weather) {
-            pages.append(.weather)
+            pages.append(
+                ExpandedPageDescriptor(
+                    id: ExpandedWidgetPageKind.weather.id,
+                    title: ExpandedWidgetPageKind.weather.title,
+                    source: .builtIn(.weather),
+                    preferredWidth: nil,
+                    render: nil
+                )
+            )
         }
 
         if isFeatureEnabled(.pomodoro) {
-            pages.append(.pomodoro)
+            pages.append(
+                ExpandedPageDescriptor(
+                    id: ExpandedWidgetPageKind.pomodoro.id,
+                    title: ExpandedWidgetPageKind.pomodoro.title,
+                    source: .builtIn(.pomodoro),
+                    preferredWidth: nil,
+                    render: nil
+                )
+            )
         }
+
+        pages.append(contentsOf: pluginExpandedPageDescriptors.map {
+            ExpandedPageDescriptor(
+                id: "plugin:\($0.id)",
+                title: $0.title,
+                source: .plugin($0.id),
+                preferredWidth: $0.preferredWidth,
+                render: $0.render
+            )
+        })
 
         return pages
     }
 
-    var activeExpandedWidgetPage: ExpandedWidgetPageKind? {
+    var activeExpandedWidgetPage: ExpandedPageDescriptor? {
         let pages = expandedWidgetPages
         guard !pages.isEmpty else { return nil }
-        if let currentExpandedPageKind, pages.contains(currentExpandedPageKind) {
-            return currentExpandedPageKind
+        if let currentExpandedPageID, let currentPage = pages.first(where: { $0.id == currentExpandedPageID }) {
+            return currentPage
         }
         return pages.first
     }
 
+    var activeExpandedBuiltInPage: ExpandedWidgetPageKind? {
+        guard let activeExpandedWidgetPage else { return nil }
+        if case .builtIn(let page) = activeExpandedWidgetPage.source {
+            return page
+        }
+        return nil
+    }
+
     var expandedPagePreferredWidth: CGFloat {
-        switch activeExpandedWidgetPage {
+        switch activeExpandedBuiltInPage {
         case .nowPlaying:
             let titleWidth = textWidth(
                 detailLine?.components(separatedBy: " - ").first ?? "Not Playing",
@@ -1111,7 +1287,7 @@ final class NotchOverlayModel {
             )
             return min(520, max(420, timerWidth + phaseWidth + 200))
         case nil:
-            return compactVisibleWidth
+            return activeExpandedWidgetPage?.preferredWidth ?? compactVisibleWidth
         }
     }
 
@@ -1215,6 +1391,8 @@ final class NotchOverlayModel {
         if shouldReloadLyrics {
             loadLyrics(for: track, requestKey: lyricsRequestKey)
         }
+
+        broadcastPluginEvent(.nowPlaying(pluginNowPlayingSnapshot))
     }
 
     func present(
@@ -1249,6 +1427,8 @@ final class NotchOverlayModel {
             notifyLayoutChange()
             return
         }
+        showsPluginStatus = false
+        pluginStatusMessage = nil
         showsHoverChange = false
         showsHoverText = false
         showsTrackChange = true
@@ -1283,6 +1463,8 @@ final class NotchOverlayModel {
         lyricsLoadState = .idle
         lyricsProvider = nil
         currentLyricsRequestKey = nil
+        showsPluginStatus = false
+        pluginStatusMessage = nil
         showsHoverChange = false
         showsHoverText = false
         isPlaying = false
@@ -1290,6 +1472,7 @@ final class NotchOverlayModel {
         showsTrackText = false
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
+        broadcastPluginEvent(.nowPlaying(nil))
         notifyLayoutChange()
     }
 
@@ -1304,6 +1487,8 @@ final class NotchOverlayModel {
             expandedPanel = .musicPlayer
             ensureExpandedWidgetPage()
             dismissVolumeOverlay()
+            showsPluginStatus = false
+            pluginStatusMessage = nil
             showsTrackChange = false
             showsTrackText = false
             perform(.generic)
@@ -1315,6 +1500,8 @@ final class NotchOverlayModel {
     func dismissExpandedPanel() {
         guard expandedPanel != nil, expandedPanel != .onboarding else { return }
         expandedPanel = nil
+        showsPluginStatus = false
+        pluginStatusMessage = nil
         showsHoverChange = false
         showsHoverText = false
         notifyLayoutChange()
@@ -1325,6 +1512,8 @@ final class NotchOverlayModel {
         collapseTask?.cancel()
         expandedPanel = nil
         dismissVolumeOverlay()
+        showsPluginStatus = false
+        pluginStatusMessage = nil
         showsTrackChange = false
         showsTrackText = false
         showsHoverChange = false
@@ -1363,12 +1552,15 @@ final class NotchOverlayModel {
 
         showsTrackChange = false
         showsTrackText = false
+        showsPluginStatus = false
+        pluginStatusMessage = nil
         showsHoverChange = false
         showsHoverText = false
         showsVolumeChange = true
         volumeLevel = max(0, min(1, level))
         volumeOutputDeviceName = outputDeviceName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         print("VolumeOverlay: show level=\(String(format: "%.3f", volumeLevel)) device=\(volumeOutputDeviceName ?? "unknown")")
+        broadcastPluginEvent(.volume(pluginVolumeSnapshot ?? PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)))
         notifyLayoutChange()
 
         extendVolumeOverlayVisibility(by: 2.6)
@@ -1394,7 +1586,7 @@ final class NotchOverlayModel {
            shouldShowChargingPowerIndicator(previousStatus: previousStatus, chargingWatts: chargingWatts) {
             showChargingPowerIndicator()
         } else if !isCharging {
-            clearTemporaryCompactWidget(for: .trailing, kind: .chargingPower)
+            clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.chargingPower))
         }
 
         refreshCompactWidgets()
@@ -1406,6 +1598,7 @@ final class NotchOverlayModel {
         weatherSymbolName = symbolName
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
+        broadcastPluginEvent(.weather(pluginWeatherSnapshot))
         notifyLayoutChange()
     }
 
@@ -1568,19 +1761,26 @@ final class NotchOverlayModel {
     }
 
     func selectExpandedWidgetPage(_ page: ExpandedWidgetPageKind) {
-        let pages = expandedWidgetPages
-        guard pages.contains(page) else { return }
+        guard let descriptor = expandedWidgetPages.first(where: {
+            if case .builtIn(let builtInPage) = $0.source {
+                return builtInPage == page
+            }
+            return false
+        }) else { return }
+        selectExpandedWidgetPage(id: descriptor.id)
+    }
 
-        if
-            let currentPage = activeExpandedWidgetPage,
-            let currentIndex = pages.firstIndex(of: currentPage),
-            let targetIndex = pages.firstIndex(of: page),
-            currentIndex != targetIndex
-        {
+    func selectExpandedWidgetPage(id: String) {
+        let pages = expandedWidgetPages
+        guard let targetIndex = pages.firstIndex(where: { $0.id == id }) else { return }
+
+        if let currentPage = activeExpandedWidgetPage,
+           let currentIndex = pages.firstIndex(where: { $0.id == currentPage.id }),
+           currentIndex != targetIndex {
             expandedPageNavigationDirection = targetIndex > currentIndex ? .forward : .backward
         }
 
-        currentExpandedPageKind = page
+        currentExpandedPageID = id
         notifyLayoutChange()
     }
 
@@ -1588,14 +1788,14 @@ final class NotchOverlayModel {
         let pages = expandedWidgetPages
         guard
             let currentPage = activeExpandedWidgetPage,
-            let index = pages.firstIndex(of: currentPage),
+            let index = pages.firstIndex(where: { $0.id == currentPage.id }),
             index > 0
         else {
             return
         }
 
         expandedPageNavigationDirection = .backward
-        currentExpandedPageKind = pages[index - 1]
+        currentExpandedPageID = pages[index - 1].id
         notifyLayoutChange()
     }
 
@@ -1603,38 +1803,64 @@ final class NotchOverlayModel {
         let pages = expandedWidgetPages
         guard
             let currentPage = activeExpandedWidgetPage,
-            let index = pages.firstIndex(of: currentPage),
+            let index = pages.firstIndex(where: { $0.id == currentPage.id }),
             index < pages.count - 1
         else {
             return
         }
 
         expandedPageNavigationDirection = .forward
-        currentExpandedPageKind = pages[index + 1]
+        currentExpandedPageID = pages[index + 1].id
         notifyLayoutChange()
     }
 
-    func widgetKinds(for placement: CompactWidgetPlacement) -> [CompactWidgetKind] {
-        CompactWidgetKind.allCases
+    func widgetPriorityItems(for placement: CompactWidgetPlacement) -> [CompactWidgetPriorityItem] {
+        let builtIns = CompactWidgetKind.allCases
             .filter { $0.placement == placement }
-            .sorted { widgetPriority(for: $0) < widgetPriority(for: $1) }
+            .map {
+                CompactWidgetPriorityItem(
+                    id: "builtin.\($0.rawValue)",
+                    identity: .builtIn($0),
+                    title: $0.title,
+                    placement: placement
+                )
+            }
+        let plugins = pluginWidgets
+            .filter {
+                switch ($0.placement, placement) {
+                case (.leading, .leading), (.trailing, .trailing):
+                    return true
+                default:
+                    return false
+                }
+            }
+            .map {
+                CompactWidgetPriorityItem(
+                    id: "plugin.\($0.id)",
+                    identity: .plugin($0.id),
+                    title: $0.title,
+                    placement: placement
+                )
+            }
+
+        return (builtIns + plugins).sorted { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
     }
 
-    func canMoveCompactWidget(_ kind: CompactWidgetKind, direction: MoveDirection) -> Bool {
-        let kinds = widgetKinds(for: kind.placement)
-        guard let index = kinds.firstIndex(of: kind) else { return false }
+    func canMoveCompactWidget(_ identity: CompactWidgetIdentity, placement: CompactWidgetPlacement, direction: MoveDirection) -> Bool {
+        let items = widgetPriorityItems(for: placement)
+        guard let index = items.firstIndex(where: { $0.identity == identity }) else { return false }
 
         switch direction {
         case .up:
             return index > 0
         case .down:
-            return index < kinds.count - 1
+            return index < items.count - 1
         }
     }
 
-    func moveCompactWidget(_ kind: CompactWidgetKind, direction: MoveDirection) {
-        var kinds = widgetKinds(for: kind.placement)
-        guard let index = kinds.firstIndex(of: kind) else { return }
+    func moveCompactWidget(_ identity: CompactWidgetIdentity, placement: CompactWidgetPlacement, direction: MoveDirection) {
+        var items = widgetPriorityItems(for: placement)
+        guard let index = items.firstIndex(where: { $0.identity == identity }) else { return }
 
         let targetIndex: Int
         switch direction {
@@ -1642,15 +1868,14 @@ final class NotchOverlayModel {
             guard index > 0 else { return }
             targetIndex = index - 1
         case .down:
-            guard index < kinds.count - 1 else { return }
+            guard index < items.count - 1 else { return }
             targetIndex = index + 1
         }
 
-        kinds.swapAt(index, targetIndex)
+        items.swapAt(index, targetIndex)
 
-        for (priority, currentKind) in kinds.enumerated() {
-            compactWidgetPriorities[currentKind] = priority
-            UserDefaults.standard.set(priority, forKey: Self.compactWidgetPriorityPrefix + currentKind.rawValue)
+        for (priority, item) in items.enumerated() {
+            setWidgetPriority(priority, for: item.identity)
         }
 
         refreshCompactWidgets()
@@ -1682,7 +1907,7 @@ final class NotchOverlayModel {
         case .weather:
             refreshCompactWidgets()
         case .pomodoro:
-            if !isEnabled, activeExpandedWidgetPage == .pomodoro, expandedPanel == .musicPlayer {
+            if !isEnabled, activeExpandedBuiltInPage == .pomodoro, expandedPanel == .musicPlayer {
                 ensureExpandedWidgetPage()
             }
             refreshCompactWidgets()
@@ -1731,7 +1956,7 @@ final class NotchOverlayModel {
     }
 
     private func refreshCompactWidgets() {
-        let availableWidgets = [
+        let builtInWidgets = [
             pinnedFileWidget,
             nowPlayingArtworkWidget,
             batteryWidget,
@@ -1740,29 +1965,46 @@ final class NotchOverlayModel {
             pomodoroWidget,
             chargingPowerWidget
         ].compactMap { $0 }
+        let availableWidgets = builtInWidgets + pluginWidgets.map(pluginCompactWidget)
 
         let leading = temporaryCompactWidgets[.leading]
             ?? availableWidgets
                 .filter { $0.placement == .leading }
-                .min { widgetPriority(for: $0.kind) < widgetPriority(for: $1.kind) }
+                .min { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
         let trailing = temporaryCompactWidgets[.trailing]
             ?? availableWidgets
                 .filter { $0.placement == .trailing }
-                .min { widgetPriority(for: $0.kind) < widgetPriority(for: $1.kind) }
+                .min { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
 
         compactWidgets = [leading, trailing].compactMap { $0 }
     }
 
-    private func widgetPriority(for kind: CompactWidgetKind) -> Int {
-        compactWidgetPriorities[kind] ?? Int.max
+    private func widgetPriority(for identity: CompactWidgetIdentity) -> Int {
+        switch identity {
+        case .builtIn(let kind):
+            return compactWidgetPriorities[kind] ?? Int.max
+        case .plugin(let id):
+            let key = Self.compactWidgetPriorityPrefix + "plugin." + id
+            return UserDefaults.standard.object(forKey: key) as? Int ?? (1_000 + (pluginWidgets.firstIndex(where: { $0.id == id }) ?? 0))
+        }
+    }
+
+    private func setWidgetPriority(_ priority: Int, for identity: CompactWidgetIdentity) {
+        switch identity {
+        case .builtIn(let kind):
+            compactWidgetPriorities[kind] = priority
+            UserDefaults.standard.set(priority, forKey: Self.compactWidgetPriorityPrefix + kind.rawValue)
+        case .plugin(let id):
+            UserDefaults.standard.set(priority, forKey: Self.compactWidgetPriorityPrefix + "plugin." + id)
+        }
     }
 
     private func ensureExpandedWidgetPage() {
         let pages = expandedWidgetPages
-        if let currentExpandedPageKind, pages.contains(currentExpandedPageKind) {
+        if let currentExpandedPageID, pages.contains(where: { $0.id == currentExpandedPageID }) {
             return
         }
-        currentExpandedPageKind = pages.first
+        currentExpandedPageID = pages.first?.id
     }
 
     private func textWidth(_ text: String, font: NSFont) -> CGFloat {
@@ -1775,6 +2017,8 @@ final class NotchOverlayModel {
             return 24
         case .visualizer:
             return 26
+        case .custom:
+            return 24
         case .labeledSymbol(let systemName, let text):
             let textWidth = NSString(string: text).size(withAttributes: [
                 .font: NSFont.systemFont(ofSize: 11, weight: .semibold)
@@ -1805,7 +2049,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "battery-widget",
-            kind: .battery,
+            identity: .builtIn(.battery),
+            title: CompactWidgetKind.battery.title,
             placement: .leading,
             style: .labeledSymbol(systemName: symbolName, text: "\(batteryLevel)%"),
             preferredWidth: compactWidgetWidth(for: .labeledSymbol(systemName: symbolName, text: "\(batteryLevel)%")),
@@ -1821,7 +2066,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "pinned-file-widget",
-            kind: .pinnedFile,
+            identity: .builtIn(.pinnedFile),
+            title: CompactWidgetKind.pinnedFile.title,
             placement: .leading,
             style: style,
             preferredWidth: compactWidgetWidth(for: style),
@@ -1836,7 +2082,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "weather-widget",
-            kind: .weather,
+            identity: .builtIn(.weather),
+            title: CompactWidgetKind.weather.title,
             placement: .trailing,
             style: .labeledSymbol(systemName: weatherSymbolName, text: weatherTemperatureText),
             preferredWidth: compactWidgetWidth(for: .labeledSymbol(systemName: weatherSymbolName, text: weatherTemperatureText)),
@@ -1855,7 +2102,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "pomodoro-widget",
-            kind: .pomodoro,
+            identity: .builtIn(.pomodoro),
+            title: CompactWidgetKind.pomodoro.title,
             placement: .trailing,
             style: style,
             preferredWidth: compactWidgetWidth(for: style),
@@ -1869,7 +2117,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "charging-power-widget",
-            kind: .chargingPower,
+            identity: .builtIn(.chargingPower),
+            title: CompactWidgetKind.chargingPower.title,
             placement: .trailing,
             style: style,
             preferredWidth: compactWidgetWidth(for: style),
@@ -1888,7 +2137,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "urgent-pomodoro-widget",
-            kind: .pomodoro,
+            identity: .builtIn(.pomodoro),
+            title: CompactWidgetKind.pomodoro.title,
             placement: .trailing,
             style: style,
             preferredWidth: compactWidgetWidth(for: style),
@@ -1901,7 +2151,8 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "now-playing-artwork",
-            kind: .nowPlayingArtwork,
+            identity: .builtIn(.nowPlayingArtwork),
+            title: CompactWidgetKind.nowPlayingArtwork.title,
             placement: .leading,
             style: .artwork,
             preferredWidth: compactWidgetWidth(for: .artwork),
@@ -1917,11 +2168,50 @@ final class NotchOverlayModel {
 
         return CompactIslandWidget(
             id: "now-playing-visualizer",
-            kind: .nowPlayingVisualizer,
+            identity: .builtIn(.nowPlayingVisualizer),
+            title: CompactWidgetKind.nowPlayingVisualizer.title,
             placement: .trailing,
             style: visualizerStyle,
             preferredWidth: compactWidgetWidth(for: visualizerStyle),
             artworkData: nil
+        )
+    }
+
+    private func pluginCompactWidget(from descriptor: PluginWidgetDescriptor) -> CompactIslandWidget {
+        let placement: CompactWidgetPlacement = {
+            switch descriptor.placement {
+            case .leading:
+                return .leading
+            case .trailing:
+                return .trailing
+            }
+        }()
+
+        let style: CompactWidgetStyle = {
+            switch descriptor.style {
+            case .artwork:
+                return .artwork
+            case .visualizer(let isActive):
+                return .visualizer(isActive: isActive)
+            case .symbol(let systemName):
+                return .symbol(systemName)
+            case .labeledSymbol(let systemName, let text):
+                return .labeledSymbol(systemName: systemName, text: text)
+            case .circularProgress(let systemName, let progress, let isActive, let text):
+                return .circularProgress(systemName: systemName, progress: progress, isActive: isActive, text: text)
+            case .custom(let render):
+                return .custom(render: render)
+            }
+        }()
+
+        return CompactIslandWidget(
+            id: "plugin-widget-\(descriptor.id)",
+            identity: .plugin(descriptor.id),
+            title: descriptor.title,
+            placement: placement,
+            style: style,
+            preferredWidth: descriptor.preferredWidth,
+            artworkData: descriptor.artworkData
         )
     }
 
@@ -2246,7 +2536,7 @@ final class NotchOverlayModel {
         pomodoroIsRunning = false
         pomodoroTimerTask?.cancel()
         pomodoroTimerTask = nil
-        clearTemporaryCompactWidget(for: .trailing, kind: .pomodoro)
+        clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.pomodoro))
     }
 
     private func shouldShowChargingPowerIndicator(
@@ -2269,7 +2559,7 @@ final class NotchOverlayModel {
         if let urgentPomodoroWidget {
             setTemporaryCompactWidget(urgentPomodoroWidget)
         } else {
-            clearTemporaryCompactWidget(for: .trailing, kind: .pomodoro)
+            clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.pomodoro))
         }
     }
 
@@ -2279,7 +2569,7 @@ final class NotchOverlayModel {
         temporaryWidgetTasks[widget.placement] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(duration))
             guard !Task.isCancelled else { return }
-            self?.clearTemporaryCompactWidget(for: widget.placement, kind: widget.kind)
+            self?.clearTemporaryCompactWidget(for: widget.placement, identity: widget.identity)
         }
     }
 
@@ -2289,8 +2579,8 @@ final class NotchOverlayModel {
         notifyLayoutChange()
     }
 
-    private func clearTemporaryCompactWidget(for placement: CompactWidgetPlacement, kind: CompactWidgetKind? = nil) {
-        if let kind, temporaryCompactWidgets[placement]?.kind != kind {
+    private func clearTemporaryCompactWidget(for placement: CompactWidgetPlacement, identity: CompactWidgetIdentity? = nil) {
+        if let identity, temporaryCompactWidgets[placement]?.identity != identity {
             return
         }
         temporaryWidgetTasks[placement]?.cancel()
@@ -2298,6 +2588,305 @@ final class NotchOverlayModel {
         temporaryCompactWidgets[placement] = nil
         refreshCompactWidgets()
         notifyLayoutChange()
+    }
+
+    func attachPluginManager(_ pluginManager: PluginManager) {
+        self.pluginManager = pluginManager
+    }
+
+    func updatePluginRuntimeInfos(_ infos: [PluginRuntimeInfo]) {
+        pluginRuntimeInfos = infos
+        notifyLayoutChange()
+    }
+
+    func bridgeStateSnapshot() -> BridgeStateSnapshot {
+        BridgeStateSnapshot(
+            nowPlaying: pluginNowPlayingSnapshot.map {
+                BridgeNowPlayingSnapshot(
+                    title: $0.title,
+                    artist: $0.artist,
+                    album: $0.album,
+                    sourceApp: $0.sourceApp,
+                    isPlaying: $0.isPlaying
+                )
+            },
+            weather: BridgeWeatherSnapshot(
+                temperatureText: pluginWeatherSnapshot.temperatureText,
+                symbolName: pluginWeatherSnapshot.symbolName,
+                manualLocation: pluginWeatherSnapshot.manualLocation
+            ),
+            volume: pluginVolumeSnapshot.map {
+                BridgeVolumeSnapshot(level: $0.level, outputDeviceName: $0.outputDeviceName)
+            },
+            expandedPanel: expandedPanel.map {
+                switch $0 {
+                case .musicPlayer:
+                    return "musicPlayer"
+                case .onboarding:
+                    return "onboarding"
+                }
+            },
+            activeExpandedPageID: activeExpandedWidgetPage?.id,
+            pluginStatusMessage: showsPluginStatus ? pluginStatusMessage : nil,
+            plugins: pluginRuntimeInfos.map {
+                BridgePluginRuntimeSnapshot(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    version: $0.version,
+                    capabilities: $0.capabilities.map(\.rawValue).sorted(),
+                    state: $0.state.rawValue,
+                    errorMessage: $0.errorMessage
+                )
+            }
+        )
+    }
+
+    func bridgeOpenMusicPlayer() {
+        guard expandedPanel != .onboarding, expandedPanel != .musicPlayer else { return }
+        expandedPanel = .musicPlayer
+        ensureExpandedWidgetPage()
+        showsPluginStatus = false
+        notifyLayoutChange()
+    }
+
+    func bridgeUpsertWidget(_ payload: BridgeWidgetPayload, clientID: String) throws {
+        guard let descriptor = payload.pluginDescriptor() else {
+            throw NSError(domain: "PullNotch.PluginBridge", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid widget payload."
+            ])
+        }
+        registerPluginWidget(descriptor, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeRemoveWidget(id: String, clientID: String) {
+        unregisterPluginWidget(id: id, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeUpsertPage(_ payload: BridgePagePayload, clientID: String) {
+        let descriptor = PluginExpandedPageDescriptor(
+            id: payload.id,
+            title: payload.title,
+            preferredWidth: CGFloat(payload.preferredWidth ?? 360)
+        ) {
+            AnyView(
+                VStack(alignment: .leading, spacing: 14) {
+                    if let symbolName = payload.symbolName {
+                        Image(systemName: symbolName)
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                    }
+
+                    if let headline = payload.headline, !headline.isEmpty {
+                        Text(headline)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+
+                    if let subheadline = payload.subheadline, !subheadline.isEmpty {
+                        Text(subheadline)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+
+                    if let body = payload.body, !body.isEmpty {
+                        Text(body)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let footnote = payload.footnote, !footnote.isEmpty {
+                        Text(footnote)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(24)
+            )
+        }
+
+        registerPluginExpandedPage(descriptor, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeRemovePage(id: String, clientID: String) {
+        unregisterPluginExpandedPage(id: id, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeClearContent(clientID: String) {
+        unregisterPluginContent(for: bridgePluginID(for: clientID))
+    }
+
+    func setPluginEnabled(_ id: String, isEnabled: Bool) {
+        pluginManager?.setPluginEnabled(id: id, isEnabled: isEnabled)
+    }
+
+    func pluginSettingsSections(for pluginID: String) -> [PluginSettingsSectionDescriptor] {
+        pluginSettingsSections.filter { $0.id.hasPrefix("\(pluginID)::") }
+    }
+
+    func makePluginContext(for manifest: PluginManifest) -> PluginContext {
+        PluginContext(
+            manifest: manifest,
+            registerWidgetHandler: { [weak self] in self?.registerPluginWidget($0, pluginID: manifest.id) },
+            unregisterWidgetHandler: { [weak self] in self?.unregisterPluginWidget(id: $0, pluginID: manifest.id) },
+            registerExpandedPageHandler: { [weak self] in self?.registerPluginExpandedPage($0, pluginID: manifest.id) },
+            unregisterExpandedPageHandler: { [weak self] in self?.unregisterPluginExpandedPage(id: $0, pluginID: manifest.id) },
+            registerSettingsSectionHandler: { [weak self] in self?.registerPluginSettingsSection($0, pluginID: manifest.id) },
+            unregisterSettingsSectionHandler: { [weak self] in self?.unregisterPluginSettingsSection(id: $0, pluginID: manifest.id) },
+            showStatusHandler: { [weak self] message, duration in self?.showPluginStatus(message: message, duration: duration) },
+            subscribeHandler: { [weak self] in self?.subscribePluginEvents($0) ?? UUID() },
+            unsubscribeHandler: { [weak self] in self?.unsubscribePluginEvents($0) },
+            nowPlayingProvider: { [weak self] in self?.pluginNowPlayingSnapshot },
+            weatherProvider: { [weak self] in self?.pluginWeatherSnapshot ?? PluginWeatherSnapshot(temperatureText: nil, symbolName: nil, manualLocation: nil) },
+            volumeProvider: { [weak self] in self?.pluginVolumeSnapshot }
+        )
+    }
+
+    func unregisterPluginContent(for pluginID: String) {
+        pluginWidgets.removeAll { $0.id.hasPrefix("\(pluginID)::") }
+        pluginExpandedPageDescriptors.removeAll { $0.id.hasPrefix("\(pluginID)::") }
+        pluginSettingsSections.removeAll { $0.id.hasPrefix("\(pluginID)::") }
+        if activeExpandedWidgetPage.map({ if case .plugin(let id) = $0.source { return id.hasPrefix("\(pluginID)::") } else { return false } }) == true {
+            currentExpandedPageID = nil
+            ensureExpandedWidgetPage()
+        }
+        refreshCompactWidgets()
+        notifyLayoutChange()
+    }
+
+    private func bridgePluginID(for clientID: String) -> String {
+        let sanitized = clientID.replacingOccurrences(of: "::", with: "--")
+        return "bridge.\(sanitized)"
+    }
+
+    private func registerPluginWidget(_ descriptor: PluginWidgetDescriptor, pluginID: String) {
+        let scoped = PluginWidgetDescriptor(
+            id: "\(pluginID)::\(descriptor.id)",
+            title: descriptor.title,
+            placement: descriptor.placement,
+            priority: descriptor.priority,
+            style: descriptor.style,
+            preferredWidth: descriptor.preferredWidth,
+            artworkData: descriptor.artworkData
+        )
+        pluginWidgets.removeAll { $0.id == scoped.id }
+        pluginWidgets.append(scoped)
+        let key = Self.compactWidgetPriorityPrefix + "plugin." + scoped.id
+        if UserDefaults.standard.object(forKey: key) == nil {
+            UserDefaults.standard.set(1_000 + descriptor.priority, forKey: key)
+        }
+        refreshCompactWidgets()
+        notifyLayoutChange()
+    }
+
+    private func unregisterPluginWidget(id: String, pluginID: String) {
+        pluginWidgets.removeAll { $0.id == "\(pluginID)::\(id)" }
+        refreshCompactWidgets()
+        notifyLayoutChange()
+    }
+
+    private func registerPluginExpandedPage(_ descriptor: PluginExpandedPageDescriptor, pluginID: String) {
+        let scoped = PluginExpandedPageDescriptor(
+            id: "\(pluginID)::\(descriptor.id)",
+            title: descriptor.title,
+            preferredWidth: descriptor.preferredWidth,
+            render: descriptor.render
+        )
+        pluginExpandedPageDescriptors.removeAll { $0.id == scoped.id }
+        pluginExpandedPageDescriptors.append(scoped)
+        ensureExpandedWidgetPage()
+        notifyLayoutChange()
+    }
+
+    private func unregisterPluginExpandedPage(id: String, pluginID: String) {
+        pluginExpandedPageDescriptors.removeAll { $0.id == "\(pluginID)::\(id)" }
+        ensureExpandedWidgetPage()
+        notifyLayoutChange()
+    }
+
+    private func registerPluginSettingsSection(_ descriptor: PluginSettingsSectionDescriptor, pluginID: String) {
+        let scoped = PluginSettingsSectionDescriptor(
+            id: "\(pluginID)::\(descriptor.id)",
+            title: descriptor.title,
+            subtitle: descriptor.subtitle,
+            render: descriptor.render
+        )
+        pluginSettingsSections.removeAll { $0.id == scoped.id }
+        pluginSettingsSections.append(scoped)
+        notifyLayoutChange()
+    }
+
+    private func unregisterPluginSettingsSection(id: String, pluginID: String) {
+        pluginSettingsSections.removeAll { $0.id == "\(pluginID)::\(id)" }
+        notifyLayoutChange()
+    }
+
+    private var pluginNowPlayingSnapshot: PluginNowPlayingSnapshot? {
+        guard let currentPresentation else { return nil }
+        return PluginNowPlayingSnapshot(
+            title: currentPresentation.detailLine?.components(separatedBy: " - ").first ?? "",
+            artist: currentPresentation.detailLine?.components(separatedBy: " - ").dropFirst().joined(separator: " - ") ?? "",
+            album: "",
+            sourceApp: sourceApp,
+            isPlaying: isPlaying
+        )
+    }
+
+    private var pluginWeatherSnapshot: PluginWeatherSnapshot {
+        PluginWeatherSnapshot(
+            temperatureText: weatherTemperatureText,
+            symbolName: weatherSymbolName,
+            manualLocation: manualWeatherLocation
+        )
+    }
+
+    private var pluginVolumeSnapshot: PluginVolumeSnapshot? {
+        guard showsVolumeChange || volumeLevel > 0 else { return nil }
+        return PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)
+    }
+
+    private func subscribePluginEvents(_ handler: @escaping @MainActor (PluginHostEvent) -> Void) -> UUID {
+        let token = UUID()
+        pluginEventHandlers[token] = handler
+        handler(.nowPlaying(pluginNowPlayingSnapshot))
+        handler(.weather(pluginWeatherSnapshot))
+        if let pluginVolumeSnapshot {
+            handler(.volume(pluginVolumeSnapshot))
+        }
+        return token
+    }
+
+    private func unsubscribePluginEvents(_ token: UUID) {
+        pluginEventHandlers[token] = nil
+    }
+
+    private func broadcastPluginEvent(_ event: PluginHostEvent) {
+        for handler in pluginEventHandlers.values {
+            handler(event)
+        }
+    }
+
+    func showPluginStatus(message: String, duration: TimeInterval = 3) {
+        pluginStatusTask?.cancel()
+        pluginStatusMessage = message
+        showsTrackChange = false
+        showsTrackText = false
+        showsHoverChange = false
+        showsHoverText = false
+        showsVolumeChange = false
+        showsPluginStatus = true
+        notifyLayoutChange()
+
+        pluginStatusTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.showsPluginStatus = false
+            self?.pluginStatusMessage = nil
+            self?.pluginStatusTask = nil
+            self?.notifyLayoutChange()
+        }
     }
 
     private func playPomodoroTransitionSound() {

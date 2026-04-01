@@ -70,12 +70,13 @@ struct IslandPresentation: Equatable {
     let isPlaying: Bool
 }
 
-enum CompactWidgetStyle: Equatable {
+enum CompactWidgetStyle {
     case artwork
     case visualizer(isActive: Bool)
     case symbol(String)
     case labeledSymbol(systemName: String, text: String)
     case circularProgress(systemName: String, progress: CGFloat, isActive: Bool, text: String)
+    case custom(render: @MainActor () -> AnyView)
 }
 
 enum NowPlayingVisualizerMode: String {
@@ -138,9 +139,10 @@ enum CompactWidgetKind: String, CaseIterable, Identifiable {
     }
 }
 
-struct CompactIslandWidget: Equatable, Identifiable {
+struct CompactIslandWidget: Identifiable {
     let id: String
-    let kind: CompactWidgetKind
+    let identity: CompactWidgetIdentity
+    let title: String
     let placement: CompactWidgetPlacement
     let style: CompactWidgetStyle
     let preferredWidth: CGFloat
