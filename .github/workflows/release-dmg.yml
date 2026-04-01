@@ -112,8 +112,12 @@ jobs:
                     -scheme "Pull Notch" \
                     -configuration Release \
                     -archivePath "$RUNNER_TEMP/PullNotch.xcarchive" \
+                    CODE_SIGN_STYLE=Manual \
                     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
                     CODE_SIGN_IDENTITY="Developer ID Application" \
+                    "CODE_SIGN_IDENTITY[sdk=macosx*]=Developer ID Application" \
+                    PROVISIONING_PROFILE_SPECIFIER="" \
+                    PROVISIONING_PROFILE="" \
                     archive
 
             - name: Create DMG
