@@ -1,6 +1,9 @@
 import Foundation
 import Network
+import OSLog
 import SwiftUI
+
+private let bridgeLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "PluginBridge")
 
 @MainActor
 final class PluginBridgeServer {
@@ -53,9 +56,13 @@ final class PluginBridgeServer {
                 Task { @MainActor in
                     switch state {
                     case .ready:
-                        print("PluginBridgeServer: listening on 127.0.0.1:\(Self.defaultPort)")
+                        bridgeLog.info("listening on 127.0.0.1:\(Self.defaultPort)")
                     case .failed(let error):
-                        print("PluginBridgeServer: failed - \(error.localizedDescription)")
+                        if error == NWError.posix(.EADDRINUSE) {
+                            bridgeLog.error("port \(Self.defaultPort) is already in use — another instance may be running")
+                        } else {
+                            bridgeLog.error("failed - \(error.localizedDescription)")
+                        }
                     default:
                         break
                     }
@@ -69,7 +76,7 @@ final class PluginBridgeServer {
             listener.start(queue: queue)
             self.listener = listener
         } catch {
-            print("PluginBridgeServer: could not start - \(error.localizedDescription)")
+            bridgeLog.error("could not start - \(error.localizedDescription)")
         }
     }
 
@@ -95,7 +102,7 @@ final class PluginBridgeServer {
                 close(connectionID: connectionID)
             }
         case .failed(let error):
-            print("PluginBridgeServer: connection failed - \(error.localizedDescription)")
+            bridgeLog.error("connection failed - \(error.localizedDescription)")
             close(connectionID: connectionID)
         case .cancelled:
             close(connectionID: connectionID)
@@ -106,8 +113,24 @@ final class PluginBridgeServer {
 
     private func isLoopbackConnection(connectionID: UUID) -> Bool {
         guard let state = connections[connectionID] else { return false }
-        let description = String(describing: state.connection.endpoint)
-        return description.contains("127.0.0.1") || description.contains("::1") || description.contains("localhost")
+        switch state.connection.endpoint {
+        case .hostPort(let host, _):
+            switch host {
+            case .ipv4(let address):
+                return address.rawValue.first == 127
+            case .ipv6(let address):
+                let raw = address.rawValue
+                return raw.count == 16
+                    && raw[0] == 0 && raw[1] == 0 && raw[2] == 0 && raw[3] == 0
+                    && raw[4] == 0 && raw[5] == 0 && raw[6] == 0 && raw[7] == 0
+                    && raw[8] == 0 && raw[9] == 0 && raw[10] == 0 && raw[11] == 0
+                    && raw[12] == 0 && raw[13] == 0 && raw[14] == 0 && raw[15] == 1
+            default:
+                return false
+            }
+        default:
+            return false
+        }
     }
 
     private func receiveNext(on connection: NWConnection, connectionID: UUID) {
@@ -303,7 +326,7 @@ final class PluginBridgeServer {
         payload.append(0x0A)
         state.connection.send(content: payload, completion: .contentProcessed { error in
             if let error {
-                print("PluginBridgeServer: send failed - \(error.localizedDescription)")
+                bridgeLog.error("send failed - \(error.localizedDescription)")
             }
         })
     }

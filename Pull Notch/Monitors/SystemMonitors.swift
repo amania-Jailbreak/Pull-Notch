@@ -13,6 +13,7 @@ import ScreenCaptureKit
 final class AppleMusicNowPlayingMonitor {
     private var pollingTask: Task<Void, Never>?
     private let mediaRemote = MediaRemoteAdapterBridge()
+    private var lastPayloadRaw: String?
 
     func start(using overlayModel: NotchOverlayModel) {
         pollingTask?.cancel()
@@ -30,33 +31,31 @@ final class AppleMusicNowPlayingMonitor {
     }
 
     private func updateOverlay(using overlayModel: NotchOverlayModel) async {
-        let result = await currentTrackInfo()
+        let rawPayload = await mediaRemote.currentPayload()
 
-        switch result {
-        case .success(let track):
-            overlayModel.updateNowPlaying(track: track)
-        case .notPlaying:
-            overlayModel.clearNowPlaying()
-        case .failure:
-            overlayModel.clearNowPlaying()
+        if let rawPayload, rawPayload == lastPayloadRaw {
+            return
         }
-    }
+        lastPayloadRaw = rawPayload
 
-    private func currentTrackInfo() async -> AppleMusicPollResult {
-        guard let rawPayload = await mediaRemote.currentPayload() else {
-            return .failure
+        guard let rawPayload else {
+            overlayModel.clearNowPlaying()
+            return
         }
 
         guard let payload = try? JSONDecoder().decode(MediaRemotePayload.self, from: Data(rawPayload.utf8)) else {
-            return .failure
+            overlayModel.clearNowPlaying()
+            return
         }
 
         if payload.title == nil {
-            return .notPlaying
+            overlayModel.clearNowPlaying()
+            return
         }
 
         guard let title = payload.title else {
-            return .failure
+            overlayModel.clearNowPlaying()
+            return
         }
 
         let isPlaying = payload.playing ?? ((payload.playbackRate ?? 0) > 0)
@@ -71,18 +70,16 @@ final class AppleMusicNowPlayingMonitor {
             ?? payload.elapsedTimeMicros.map { $0 / 1_000_000 }
             ?? payload.elapsedTime
 
-        return .success(
-            .init(
-                title: title,
-                album: payload.album ?? "",
-                artist: artist,
-                isPlaying: isPlaying,
-                bundleIdentifier: payload.bundleIdentifier ?? "unknown",
-                artworkData: artworkData,
-                durationSeconds: durationSeconds,
-                playbackPositionSeconds: playbackPositionSeconds
-            )
-        )
+        overlayModel.updateNowPlaying(track: .init(
+            title: title,
+            album: payload.album ?? "",
+            artist: artist,
+            isPlaying: isPlaying,
+            bundleIdentifier: payload.bundleIdentifier ?? "unknown",
+            artworkData: artworkData,
+            durationSeconds: durationSeconds,
+            playbackPositionSeconds: playbackPositionSeconds
+        ))
     }
 
     private func statusTitle(for isPlaying: Bool) -> String {
@@ -93,12 +90,6 @@ final class AppleMusicNowPlayingMonitor {
             return "Paused"
         }
     }
-}
-
-private enum AppleMusicPollResult {
-    case success(AppleMusicTrack)
-    case notPlaying
-    case failure
 }
 
 final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
@@ -254,6 +245,9 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
 
         let bandCount = Self.visualizerBandRanges.count
         let bucketWeights: [CGFloat] = [0.62, 0.76, 1.8, 2.08, 2.04, 3.50]
+        // NOTE: bucketWeights are tuned for a 48000 Hz sample rate. Other
+        // rates will shift the frequency-to-bin mapping but the visual result
+        // remains acceptable for typical audio content.
         let timePhase = CGFloat(Date().timeIntervalSinceReferenceDate)
         let frequencyBandPeaks = fftBandPeaks(
             from: monoSamples,

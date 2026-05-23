@@ -89,13 +89,6 @@ final class AudioAnalyzer {
             let idleTarget = max(0, 1 - (nextEnergy * 1.5))
             let nextIdle = self.riseFall(self.smoothedIdleLevel, idleTarget, rise: 0.12, fall: 0.32)
 
-            self.smoothedEnergy = nextEnergy
-            self.smoothedBass = nextBass
-            self.smoothedMid = nextMid
-            self.smoothedTreble = nextTreble
-            self.smoothedAttack = nextAttack
-            self.smoothedIdleLevel = nextIdle
-
             let metrics = VisualizerMetrics(
                 energy: energy,
                 bass: nextBass,
@@ -107,7 +100,14 @@ final class AudioAnalyzer {
             )
 
             Task { @MainActor [weak self] in
-                self?.update(metrics: metrics, forceIdle: false)
+                guard let self else { return }
+                self.smoothedEnergy = nextEnergy
+                self.smoothedBass = nextBass
+                self.smoothedMid = nextMid
+                self.smoothedTreble = nextTreble
+                self.smoothedAttack = nextAttack
+                self.smoothedIdleLevel = nextIdle
+                self.update(metrics: metrics, forceIdle: false)
             }
         }
     }

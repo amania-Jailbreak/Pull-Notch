@@ -5,6 +5,26 @@ import PullNotchPluginKit
 enum CompactWidgetIdentity: Hashable {
     case builtIn(CompactWidgetKind)
     case plugin(String)
+
+    var storageToken: String {
+        switch self {
+        case .builtIn(let kind):
+            return "builtin:\(kind.rawValue)"
+        case .plugin(let id):
+            return "plugin:\(id)"
+        }
+    }
+
+    init?(storageToken: String) {
+        if storageToken.hasPrefix("builtin:"),
+           let kind = CompactWidgetKind(rawValue: String(storageToken.dropFirst("builtin:".count))) {
+            self = .builtIn(kind)
+        } else if storageToken.hasPrefix("plugin:") {
+            self = .plugin(String(storageToken.dropFirst("plugin:".count)))
+        } else {
+            return nil
+        }
+    }
 }
 
 struct CompactWidgetPriorityItem: Identifiable {
@@ -12,6 +32,13 @@ struct CompactWidgetPriorityItem: Identifiable {
     let identity: CompactWidgetIdentity
     let title: String
     let placement: CompactWidgetPlacement
+}
+
+struct CompactWidgetLayoutItem: Identifiable {
+    let id: String
+    let identity: CompactWidgetIdentity
+    let title: String
+    let zone: CompactWidgetZone
 }
 
 enum ExpandedPageSource {

@@ -83,6 +83,11 @@ final class MediaRemoteAdapterBridge {
             stderrData.append(chunk)
         }
 
+        // DispatchSemaphore is required here because Process.run() is
+        // asynchronous and we need to synchronously wait for the external
+        // perl script to finish before returning the result. The calling
+        // context dispatches to a background queue, so the main thread is
+        // never blocked.
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in
             finished.signal()
