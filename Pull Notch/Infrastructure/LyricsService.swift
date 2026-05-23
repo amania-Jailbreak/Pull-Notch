@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let lyricsLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "LyricsService")
 
 #if canImport(MusanovaKit) && canImport(MusicKit)
 import MusanovaKit
@@ -132,6 +135,7 @@ actor LyricsService {
         case musanovaKit = "MusanovaKit"
         case qqMusic = "QQ Music"
         case netEase = "NetEase"
+        case amaniaLyrics = "Amania Lyrics"
     }
 
     private struct ProviderFetchResult {
@@ -139,6 +143,9 @@ actor LyricsService {
         let lyrics: ResolvedLyrics?
     }
 
+    // These are public client credentials distributed with the petitlyrics
+    // mobile app. Not secret API keys — they identify the client application,
+    // not a user account.
     private enum PetitLyricsConstants {
         static let endpoint = "https://p1.petitlyrics.com/api/GetPetitLyricsData.php"
         static let clientAppId = "p1110417"
@@ -157,6 +164,15 @@ actor LyricsService {
     }()
 
     private var cache: [LyricsRequestKey: ResolvedLyrics?] = [:]
+    private var cacheOrder: [LyricsRequestKey] = []
+    private static let cacheLimit = 50
+
+    private func trimCache() {
+        while cacheOrder.count > Self.cacheLimit, let oldest = cacheOrder.first {
+            cache.removeValue(forKey: oldest)
+            cacheOrder.removeFirst()
+        }
+    }
 
     func lyrics(
         trackName: String,
@@ -182,10 +198,18 @@ actor LyricsService {
             return cached
         }
 
-        log("starting parallel fetch for \(key.trackName) / \(key.artistName)")
+        log("starting fetch for \(key.trackName) / \(key.artistName)")
+
+        if let amaniaResult = await fetchAmaniaLyricsMatch(key: key) {
+            log("selected Amania Lyrics as highest priority provider")
+            cache[key] = amaniaResult
+            cacheOrder.append(key)
+            trimCache()
+            return amaniaResult
+        }
 
         let resolvedLyrics = await withTaskGroup(of: ProviderFetchResult.self, returning: ResolvedLyrics?.self) { group in
-            for provider in LyricsFetchProvider.allCases {
+            for provider in LyricsFetchProvider.allCases where provider != .amaniaLyrics {
                 group.addTask { [self] in
                     await fetchUsingProvider(provider, key: key)
                 }
@@ -203,6 +227,8 @@ actor LyricsService {
         }
 
         cache[key] = resolvedLyrics
+        cacheOrder.append(key)
+        trimCache()
 
         if resolvedLyrics == nil {
             log("all providers missed for \(key.trackName) / \(key.artistName)")
@@ -313,6 +339,8 @@ actor LyricsService {
             lyrics = await fetchQQMusicLyricsMatch(key: key)
         case .netEase:
             lyrics = await fetchNetEaseLyricsMatch(key: key)
+        case .amaniaLyrics:
+            lyrics = await fetchAmaniaLyricsMatch(key: key)
         }
 
         if let lyrics {
@@ -326,7 +354,7 @@ actor LyricsService {
     }
 
     private func log(_ message: String) {
-        print("LyricsService: \(message)")
+        lyricsLog.debug("\(message, privacy: .private)")
     }
 
     private func fetchExactMatch(key: LyricsRequestKey) async -> LrcLibLyrics? {
@@ -442,6 +470,33 @@ actor LyricsService {
             syncedLyrics: lrcString,
             provider: .netEase
         )
+    }
+
+    private func fetchAmaniaLyricsMatch(key: LyricsRequestKey) async -> ResolvedLyrics? {
+        var components = URLComponents(string: "https://lyric.amania.jp/search")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: key.trackName)
+        ]
+
+        guard let url = components?.url else { return nil }
+
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse else { return nil }
+            guard httpResponse.statusCode == 200 else { return nil }
+            guard let lrcString = String(data: data, encoding: .utf8), !lrcString.isEmpty else { return nil }
+
+            let parsedLines = parseSyncedLyrics(lrcString)
+            guard !parsedLines.isEmpty else { return nil }
+
+            return ResolvedLyrics(
+                plainLyrics: parsedLines.map(\.text).joined(separator: "\n"),
+                syncedLyrics: lrcString,
+                provider: .amaniaLyrics
+            )
+        } catch {
+            return nil
+        }
     }
 
     private func fetchMusanovaLyricsMatch(key: LyricsRequestKey) async -> ResolvedLyrics? {

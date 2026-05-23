@@ -14,11 +14,14 @@ import CoreMedia
 import Foundation
 import IOKit.ps
 import Observation
+import OSLog
 import PullNotchPluginKit
 import ScreenCaptureKit
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
+
+private let appLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "App")
 
 @main
 struct Pull_NotchApp: App {
@@ -61,7 +64,7 @@ private extension NSColor {
         return NSColor(
             calibratedHue: hue,
             saturation: saturation,
-            brightness: min(1, max(0, brightness * multiplier)),
+            brightness: max(0.01, min(1, brightness * multiplier)),
             alpha: alpha
         )
     }
@@ -108,6 +111,122 @@ private struct ArtworkPalette {
     let subColor: NSColor
 }
 
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: URL
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+    }
+}
+
+private struct AppReleaseVersion: Comparable {
+    let version: [Int]
+    let build: Int
+
+    static func < (lhs: AppReleaseVersion, rhs: AppReleaseVersion) -> Bool {
+        let componentCount = max(lhs.version.count, rhs.version.count)
+        for index in 0..<componentCount {
+            let lhsComponent = index < lhs.version.count ? lhs.version[index] : 0
+            let rhsComponent = index < rhs.version.count ? rhs.version[index] : 0
+            if lhsComponent != rhsComponent {
+                return lhsComponent < rhsComponent
+            }
+        }
+        return lhs.build < rhs.build
+    }
+}
+
+private final class GitHubUpdateChecker {
+    private static let latestReleaseURL = URL(string: "https://api.github.com/repos/amania-Jailbreak/Pull-Notch/releases/latest")!
+    private static let lastAutomaticCheckKey = "PullNotch.update.lastAutomaticCheck"
+    private static let lastNotifiedTagKey = "PullNotch.update.lastNotifiedTag"
+    private let session: URLSession
+
+    init() {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 10
+        configuration.httpAdditionalHeaders = [
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Pull Notch Update Checker"
+        ]
+        session = URLSession(configuration: configuration)
+    }
+
+    func checkAutomatically() async -> (release: GitHubRelease, version: AppReleaseVersion)? {
+        let now = Date()
+        let lastCheck = UserDefaults.standard.object(forKey: Self.lastAutomaticCheckKey) as? Date
+        if let lastCheck, now.timeIntervalSince(lastCheck) < 60 * 60 * 24 {
+            return nil
+        }
+
+        UserDefaults.standard.set(now, forKey: Self.lastAutomaticCheckKey)
+
+        guard let result = await latestUpdate() else { return nil }
+        guard UserDefaults.standard.string(forKey: Self.lastNotifiedTagKey) != result.release.tagName else { return nil }
+        UserDefaults.standard.set(result.release.tagName, forKey: Self.lastNotifiedTagKey)
+        return result
+    }
+
+    private func latestUpdate() async -> (release: GitHubRelease, version: AppReleaseVersion)? {
+        guard let currentVersion = Self.currentAppVersion() else { return nil }
+
+        do {
+            let (data, response) = try await session.data(from: Self.latestReleaseURL)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
+
+            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+            guard let latestVersion = Self.releaseVersion(fromTag: release.tagName) else { return nil }
+            guard currentVersion < latestVersion else { return nil }
+            return (release, latestVersion)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func currentAppVersion() -> AppReleaseVersion? {
+        let info = Bundle.main.infoDictionary
+        guard
+            let rawVersion = info?["CFBundleShortVersionString"] as? String,
+            let rawBuild = info?["CFBundleVersion"] as? String,
+            let build = Int(rawBuild)
+        else {
+            return nil
+        }
+
+        return AppReleaseVersion(
+            version: rawVersion.split(separator: ".").compactMap { Int($0) },
+            build: build
+        )
+    }
+
+    private static func releaseVersion(fromTag tag: String) -> AppReleaseVersion? {
+        let pattern = #"^v([0-9]+(?:\.[0-9]+)*)-build-([0-9]+)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(tag.startIndex..., in: tag)
+        guard
+            let match = regex.firstMatch(in: tag, range: range),
+            let versionRange = Range(match.range(at: 1), in: tag),
+            let buildRange = Range(match.range(at: 2), in: tag),
+            let build = Int(tag[buildRange])
+        else {
+            return nil
+        }
+
+        return AppReleaseVersion(
+            version: tag[versionRange].split(separator: ".").compactMap { Int($0) },
+            build: build
+        )
+    }
+}
+
+enum NotchOverlayDisplayMode {
+    case macDisplay
+    case externalDisplay
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayWindow: NotchPanel?
     private var settingsWindow: SettingsPanel?
@@ -119,11 +238,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let volumeMonitor = SystemVolumeMonitor()
     private let batteryMonitor = SystemBatteryMonitor()
     private let weatherMonitor = WeatherMonitor()
+    private let updateChecker = GitHubUpdateChecker()
     private var sizeObserver: NSObjectProtocol?
     private var outsideClickMonitor: Any?
     private var scrollWheelMonitor: Any?
+    private var spaceKeyMonitor: Any?
     private var sharingPicker: NSSharingServicePicker?
     private var lastScrollPageSwitchAt: TimeInterval = 0
+    private var lastOverlayFrame: NSRect?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -157,6 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         observeOutsideClicks()
         observeScrollWheelPaging()
+        observeSpaceKeyForToastDismissal()
         nowPlayingMonitor.start(using: overlayModel)
         screenAudioMonitor.start(using: overlayModel)
         volumeMonitor.start(using: overlayModel)
@@ -164,6 +287,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         weatherMonitor.start(using: overlayModel)
         pluginManager.start(using: overlayModel)
         pluginBridgeServer.start(using: overlayModel)
+        scheduleAutomaticUpdateCheck()
+    }
+
+    private func scheduleAutomaticUpdateCheck() {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, let update = await updateChecker.checkAutomatically() else { return }
+            await MainActor.run {
+                self.showUpdateAvailableAlert(release: update.release, version: update.version)
+            }
+        }
+    }
+
+    private func showUpdateAvailableAlert(release: GitHubRelease, version: AppReleaseVersion) {
+        let versionText = version.version.map(String.init).joined(separator: ".")
+        let alert = NSAlert()
+        alert.messageText = "Pull Notch \(versionText) が利用可能です"
+        alert.informativeText = "新しいバージョンがGitHub Releasesで公開されています。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "リリースページを開く")
+        alert.addButton(withTitle: "あとで")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(release.htmlURL)
+        }
     }
 
     @objc private func updateOverlayPosition() {
@@ -174,10 +322,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        overlayModel.setDisplayMode(isBuiltInDisplay(screen) ? .macDisplay : .externalDisplay)
+
         let panelSize = overlayModel.panelSize
         let x = screen.frame.midX - (panelSize.width / 2)
-        let y = screen.frame.maxY - panelSize.height + 10
-        overlayWindow.setFrame(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height), display: true)
+        let y: CGFloat
+        if overlayModel.usesExternalCompactLayout {
+            y = screen.frame.maxY - panelSize.height
+        } else {
+            y = screen.frame.maxY - panelSize.height + 10
+        }
+        let targetFrame = NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height)
+
+        guard !framesApproximatelyEqual(lastOverlayFrame ?? overlayWindow.frame, targetFrame) else { return }
+        lastOverlayFrame = targetFrame
+        overlayWindow.setFrame(targetFrame, display: true, animate: false)
+    }
+
+    private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
+        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+            return true
+        }
+        return CGDisplayIsBuiltin(displayID) != 0
+    }
+
+    private func framesApproximatelyEqual(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) < 0.5
+            && abs(lhs.origin.y - rhs.origin.y) < 0.5
+            && abs(lhs.size.width - rhs.size.width) < 0.5
+            && abs(lhs.size.height - rhs.size.height) < 0.5
     }
 
     private func createOverlayWindow() {
@@ -326,6 +499,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
     }
+
+    private func observeSpaceKeyForToastDismissal() {
+        spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard
+                event.keyCode == 49,
+                event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+                let self,
+                let overlayWindow,
+                overlayWindow.frame.contains(NSEvent.mouseLocation),
+                self.overlayModel.handleToastSpaceKey()
+            else {
+                return event
+            }
+
+            return nil
+        }
+    }
 }
 
 final class NotchPanel: NSPanel {
@@ -368,7 +558,7 @@ struct SettingsWindowView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.black, Color(red: 0.07, green: 0.07, blue: 0.09)],
+                colors: [Color.black, Color(red: 0.045, green: 0.045, blue: 0.065), Color(red: 0.09, green: 0.07, blue: 0.12)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -383,7 +573,7 @@ struct SettingsWindowView: View {
             }
             .padding(24)
         }
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(minWidth: 1100, minHeight: 680)
         .onAppear {
             manualWeatherLocationDraft = overlayModel.manualWeatherLocation ?? ""
         }
@@ -393,14 +583,23 @@ struct SettingsWindowView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Settings")
-                .font(.system(size: 28, weight: .bold))
+        HStack(spacing: 14) {
+            Image(systemName: "capsule.tophalf.filled")
+                .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
 
-            Text("機能切り替えと widget の見え方を、カテゴリごとに整理できます。")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.58))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Pull Notch Settings")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("表示、Widget、天気、Pluginをここからまとめて調整できます。")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.58))
+            }
+
+            Spacer(minLength: 0)
         }
     }
 
@@ -410,24 +609,19 @@ struct SettingsWindowView: View {
                 tabPickerButton(for: tab)
             }
         }
-        .frame(width: 210, alignment: .topLeading)
-        .padding(8)
+        .frame(width: 198, alignment: .topLeading)
+        .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
+                .fill(Color.clear)
         )
     }
 
     private func tabPickerButton(for tab: SettingsTab) -> some View {
         let isSelected = selectedTab == tab
-        let subtitleColor: Color = isSelected ? .black.opacity(0.7) : .white.opacity(0.42)
-        let foregroundColor: Color = isSelected ? .black : .white.opacity(0.82)
-        let backgroundFill: Color = isSelected ? .white : .white.opacity(0.04)
-        let borderOpacity: Double = isSelected ? 0 : 0.08
+        let subtitleColor: Color = isSelected ? .black.opacity(0.68) : .white.opacity(0.42)
+        let foregroundColor: Color = isSelected ? .black : .white.opacity(0.84)
+        let backgroundFill: Color = isSelected ? .white : .clear
 
         return Button {
             withAnimation(.easeOut(duration: 0.16)) {
@@ -437,7 +631,7 @@ struct SettingsWindowView: View {
             HStack(spacing: 10) {
                 Image(systemName: iconName(for: tab))
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 14)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tab.title)
@@ -449,17 +643,18 @@ struct SettingsWindowView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if isSelected {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                }
             }
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.vertical, 11)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(backgroundFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.white.opacity(borderOpacity), lineWidth: 1)
-                    )
             )
         }
         .buttonStyle(.plain)
@@ -478,6 +673,7 @@ struct SettingsWindowView: View {
             case .widgets:
                 LazyVStack(spacing: 14) {
                     nowPlayingSection
+                    toastSection
                     compactWidgetPrioritySection
                 }
                 .padding(.vertical, 2)
@@ -626,6 +822,29 @@ struct SettingsWindowView: View {
         }
     }
 
+    private var toastSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader(
+                    title: "Toast",
+                    subtitle: "Widgetとは別に、曲変更バナーの位置へ常時出す小さな情報表示です。"
+                )
+
+                settingsToggleButton(
+                    title: "歌詞Toastを表示",
+                    subtitle: "再生中の曲に同期歌詞があれば、現在行を常時表示します。",
+                    isOn: overlayModel.toastShowsLyrics
+                ) {
+                    overlayModel.setToastLyricsVisible(!overlayModel.toastShowsLyrics)
+                }
+
+                Text("歌詞が見つからない場合は曲名表示にフォールバックします。")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+        }
+    }
+
     private func visualizerModeButton(_ mode: NowPlayingVisualizerMode, title: String) -> some View {
         Button {
             overlayModel.setNowPlayingVisualizerMode(mode)
@@ -672,54 +891,128 @@ struct SettingsWindowView: View {
 
     private var compactWidgetPrioritySection: some View {
         settingsCard {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 sectionHeader(
-                    title: "Compact Widget Priority",
-                    subtitle: "左右スロットごとに、優先順位が高い widget から表示されます。"
+                    title: "Compact Widgets",
+                    subtitle: "Widgetを1つの場所だけに置きます。Left/Rightは上から順に表示候補、Hiddenは完全に非表示です。"
                 )
 
-                compactPriorityGroup(title: "Left Slot", placement: .leading)
-                compactPriorityGroup(title: "Right Slot", placement: .trailing)
+                HStack(alignment: .top, spacing: 12) {
+                    compactWidgetGroup(zone: .leading)
+                    compactWidgetGroup(zone: .trailing)
+                    compactWidgetGroup(zone: .hidden)
+                }
             }
         }
     }
 
-    private func compactPriorityGroup(title: String, placement: CompactWidgetPlacement) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
+    private func compactWidgetGroup(zone: CompactWidgetZone) -> some View {
+        let items = overlayModel.widgetLayoutItems(for: zone)
 
-            ForEach(overlayModel.widgetPriorityItems(for: placement)) { item in
-                HStack(spacing: 12) {
-                    Text(item.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(zone.title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
 
-                    Spacer(minLength: 0)
+                Text(zoneDescription(zone))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.38))
 
-                    priorityButton("chevron.up") {
-                        overlayModel.moveCompactWidget(item.identity, placement: placement, direction: .up)
+                Spacer(minLength: 0)
+
+                Text("\(items.count)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.44))
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+
+            VStack(spacing: 0) {
+                if items.isEmpty {
+                    compactWidgetEmptyState(zone)
+                } else {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        compactWidgetRow(item, zone: zone, index: index)
+                        if index < items.count - 1 {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.06))
+                                .frame(height: 1)
+                        }
                     }
-                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, placement: placement, direction: .up))
-
-                    priorityButton("chevron.down") {
-                        overlayModel.moveCompactWidget(item.identity, placement: placement, direction: .down)
-                    }
-                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, placement: placement, direction: .down))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                        )
-                )
             }
         }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func compactWidgetRow(_ item: CompactWidgetLayoutItem, zone: CompactWidgetZone, index: Int) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("\(index + 1)")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.38))
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+
+                Text(widgetIdentityLabel(item.identity))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.38))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 4) {
+                priorityButton("chevron.up") { overlayModel.moveCompactWidget(item.identity, in: zone, direction: .up) }
+                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, in: zone, direction: .up))
+
+                priorityButton("chevron.down") { overlayModel.moveCompactWidget(item.identity, in: zone, direction: .down) }
+                    .disabled(!overlayModel.canMoveCompactWidget(item.identity, in: zone, direction: .down))
+            }
+
+            HStack(spacing: 4) {
+                if zone != .leading {
+                    widgetMoveChip("arrow.left") { overlayModel.moveCompactWidget(item.identity, to: .leading) }
+                }
+
+                if zone != .trailing {
+                    widgetMoveChip("arrow.right") { overlayModel.moveCompactWidget(item.identity, to: .trailing) }
+                }
+
+                if zone != .hidden {
+                    widgetMoveChip("eye.slash", subtle: true) { overlayModel.moveCompactWidget(item.identity, to: .hidden) }
+                }
+            }
+        }
+        .padding(.vertical, 9)
+    }
+
+    private func compactWidgetEmptyState(_ zone: CompactWidgetZone) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: zone == .hidden ? "tray" : "rectangle.dashed")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.32))
+
+            Text(zone == .hidden ? "Nothing hidden" : "No widgets here")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.62))
+
+            Text(zone == .hidden ? "Hide buttons will move widgets into this area." : "Use Left/Right buttons on another card to fill this slot.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.38))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 14)
     }
 
     private func priorityButton(_ systemName: String, action: @escaping () -> Void) -> some View {
@@ -727,13 +1020,73 @@ struct SettingsWindowView: View {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white.opacity(0.82))
-                .frame(width: 24, height: 24)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.08))
-                )
+                .frame(width: 20, height: 20)
         }
         .buttonStyle(.plain)
+    }
+
+    private func widgetMoveChip(_ systemName: String, subtle: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(subtle ? .white.opacity(0.48) : .white.opacity(0.78))
+                .frame(width: 24, height: 22)
+                .background(Capsule(style: .continuous).fill(Color.white.opacity(subtle ? 0.04 : 0.075)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func zoneAccent(_ zone: CompactWidgetZone) -> Color {
+        switch zone {
+        case .leading:
+            return Color(red: 0.45, green: 0.78, blue: 1.0)
+        case .trailing:
+            return Color(red: 0.72, green: 0.96, blue: 0.55)
+        case .hidden:
+            return Color.white.opacity(0.55)
+        }
+    }
+
+    private func zonePanelFill(_ zone: CompactWidgetZone) -> Color {
+        switch zone {
+        case .leading:
+            return Color.white.opacity(0.03)
+        case .trailing:
+            return Color.white.opacity(0.03)
+        case .hidden:
+            return Color.white.opacity(0.02)
+        }
+    }
+
+    private func zoneIcon(_ zone: CompactWidgetZone) -> String {
+        switch zone {
+        case .leading:
+            return "arrow.left.to.line.compact"
+        case .trailing:
+            return "arrow.right.to.line.compact"
+        case .hidden:
+            return "eye.slash.fill"
+        }
+    }
+
+    private func zoneDescription(_ zone: CompactWidgetZone) -> String {
+        switch zone {
+        case .leading:
+            return "左側に表示"
+        case .trailing:
+            return "右側に表示"
+        case .hidden:
+            return "表示しない"
+        }
+    }
+
+    private func widgetIdentityLabel(_ identity: CompactWidgetIdentity) -> String {
+        switch identity {
+        case .builtIn:
+            return "Built-in widget"
+        case .plugin(let id):
+            return id.components(separatedBy: "::").first.map { "Plugin: \($0)" } ?? "Plugin widget"
+        }
     }
 
     private func settingsToggleButton(
@@ -769,14 +1122,8 @@ struct SettingsWindowView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                    )
-            )
+            .background(Color.white.opacity(isOn ? 0.045 : 0.025))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -816,13 +1163,43 @@ struct SettingsWindowView: View {
                 )
 
                 if overlayModel.pluginRuntimeInfos.isEmpty {
-                    Text("有効な plugin はまだ見つかっていません。")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.58))
+                    VStack(alignment: .leading, spacing: 10) {
+                        Image(systemName: "puzzlepiece.extension")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.32))
+
+                        Text("No plugins loaded")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        Text("Application Support に plugin bundle を置くと、ここに状態と設定が表示されます。")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white.opacity(0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                            )
+                    )
                 } else {
                     ForEach(overlayModel.pluginRuntimeInfos) { plugin in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 12) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(plugin.state == .loaded ? Color.green.opacity(0.14) : Color.white.opacity(0.07))
+                                        .frame(width: 38, height: 38)
+
+                                    Image(systemName: "puzzlepiece.extension.fill")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(plugin.state == .loaded ? Color.green.opacity(0.9) : .white.opacity(0.52))
+                                }
+
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(plugin.displayName)
                                         .font(.system(size: 13, weight: .semibold))
@@ -860,7 +1237,7 @@ struct SettingsWindowView: View {
                                 overlayModel.setPluginEnabled(plugin.id, isEnabled: plugin.state == .disabled)
                             }
 
-                            let sections = overlayModel.pluginSettingsSections(for: plugin.id)
+                            let sections = overlayModel.settingsSectionsForPlugin(plugin.id)
                             ForEach(sections) { section in
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text(section.title)
@@ -892,10 +1269,10 @@ struct SettingsWindowView: View {
                         .padding(.vertical, 12)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
+                                .fill(Color.white.opacity(0.055))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                                        .stroke(Color.white.opacity(plugin.state == .loaded ? 0.12 : 0.06), lineWidth: 1)
                                 )
                         )
                     }
@@ -911,14 +1288,14 @@ struct SettingsWindowView: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.08), Color.white.opacity(0.035)],
+                            colors: [Color.white.opacity(0.055), Color.white.opacity(0.024)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.055), lineWidth: 1)
                     )
             )
     }
@@ -926,7 +1303,7 @@ struct SettingsWindowView: View {
     private func sectionHeader(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
 
             Text(subtitle)
@@ -954,6 +1331,9 @@ struct SettingsWindowView: View {
 }
 
 @Observable
+// TODO: NotchOverlayModel has grown to ~3000 lines. Consider splitting into
+// focused modules (e.g. NowPlayingModel, PomodoroModel, PluginHostModel,
+// WidgetLayoutManager) to improve maintainability and testability.
 final class NotchOverlayModel {
     static let layoutDidChangeNotification = Notification.Name("NotchOverlayModel.layoutDidChange")
     private static let hasShownOnboardingKey = "PullNotch.hasShownOnboarding"
@@ -963,12 +1343,16 @@ final class NotchOverlayModel {
     private static let nowPlayingVisualizerVisibleKey = "PullNotch.nowPlaying.visualizerVisible"
     private static let nowPlayingVisualizerAnimatedKey = "PullNotch.nowPlaying.visualizerAnimated"
     private static let nowPlayingVisualizerModeKey = "PullNotch.nowPlaying.visualizerMode"
+    private static let toastLyricsVisibleKey = "PullNotch.toast.lyricsVisible"
     private static let compactWidgetPriorityPrefix = "PullNotch.compactWidgetPriority."
+    private static let compactWidgetLayoutPrefix = "PullNotch.compactWidgetLayout."
     private static let pinnedFileBookmarkKey = "PullNotch.pinnedFileBookmark"
 
     let compactWidth: CGFloat = 290
     let compactEmptyWidth: CGFloat = 244
     let notchHeight: CGFloat = 52
+    let externalCompactHeight: CGFloat = 26
+    let externalCompactWidth: CGFloat = 520
     let expandedHeight: CGFloat = 88
     let volumeExpandedHeight: CGFloat = 112
     let playerExpandedHeight: CGFloat = 286
@@ -985,6 +1369,7 @@ final class NotchOverlayModel {
     private var temporaryWidgetTasks: [CompactWidgetPlacement: Task<Void, Never>] = [:]
     private var lyricsTask: Task<Void, Never>?
     private var pluginStatusTask: Task<Void, Never>?
+    private var hoverHideTask: Task<Void, Never>?
     private let lyricsService = LyricsService()
 
     private(set) var currentPresentation: IslandPresentation?
@@ -1001,6 +1386,7 @@ final class NotchOverlayModel {
     private(set) var volumeLevel: Double = 0
     private(set) var volumeOutputDeviceName: String?
     private(set) var sourceApp: String?
+    private(set) var albumName: String?
     private(set) var artworkData: Data?
     private(set) var visualizerBrightColor: Color = .white.opacity(0.92)
     private(set) var visualizerDarkColor: Color = .white.opacity(0.6)
@@ -1031,16 +1417,19 @@ final class NotchOverlayModel {
     private(set) var nowPlayingShowsVisualizer = true
     private(set) var nowPlayingAnimatesVisualizer = true
     private(set) var nowPlayingVisualizerMode: NowPlayingVisualizerMode = .fake
+    private(set) var toastShowsLyrics = false
+    private(set) var toastLyricsDismissed = false
     private(set) var liveVisualizerHeights: [CGFloat] = Array(repeating: 5, count: 6)
     private(set) var realVisualizerIsAvailable = false
     private(set) var launchAtLoginEnabled = false
     private(set) var launchAtLoginStatusText = "ログイン時には起動しません。"
-    private(set) var compactWidgetPriorities: [CompactWidgetKind: Int] = [:]
+    private(set) var compactWidgetLayout = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
     private(set) var pluginStatusMessage: String?
     private(set) var showsPluginStatus = false
     private(set) var currentExpandedPageID: String?
     private(set) var expandedPageNavigationDirection: ExpandedPageNavigationDirection = .forward
     private(set) var expandedPanel: ExpandedIslandPanel?
+    private(set) var displayMode: NotchOverlayDisplayMode = .macDisplay
     private(set) var featureStates: [OverlayFeature: Bool] = [:]
     private var pluginEventHandlers: [UUID: @MainActor (PluginHostEvent) -> Void] = [:]
     private weak var pluginManager: PluginManager?
@@ -1063,16 +1452,12 @@ final class NotchOverlayModel {
         nowPlayingShowsArtwork = UserDefaults.standard.object(forKey: Self.nowPlayingArtworkVisibleKey) as? Bool ?? true
         nowPlayingShowsVisualizer = UserDefaults.standard.object(forKey: Self.nowPlayingVisualizerVisibleKey) as? Bool ?? true
         nowPlayingAnimatesVisualizer = UserDefaults.standard.object(forKey: Self.nowPlayingVisualizerAnimatedKey) as? Bool ?? true
+        toastShowsLyrics = UserDefaults.standard.object(forKey: Self.toastLyricsVisibleKey) as? Bool ?? false
         if let storedMode = UserDefaults.standard.string(forKey: Self.nowPlayingVisualizerModeKey),
            let visualizerMode = NowPlayingVisualizerMode(rawValue: storedMode) {
             nowPlayingVisualizerMode = visualizerMode
         }
-        compactWidgetPriorities = Dictionary(
-            uniqueKeysWithValues: CompactWidgetKind.allCases.enumerated().map { index, kind in
-                let storedPriority = UserDefaults.standard.object(forKey: Self.compactWidgetPriorityPrefix + kind.rawValue) as? Int
-                return (kind, storedPriority ?? index)
-            }
-        )
+        compactWidgetLayout = normalizedCompactWidgetLayout(Self.loadCompactWidgetLayout())
         pinnedFileURL = Self.restorePinnedFileURL()
         pomodoroRemainingSeconds = pomodoroPhase.duration
         refreshLaunchAtLoginStatus()
@@ -1084,13 +1469,47 @@ final class NotchOverlayModel {
     }
 
     var visibleWidth: CGFloat {
+        if usesExternalCompactLayout {
+            return max(compactVisibleWidth, externalCompactWidth)
+        }
         if expandedPanel == .musicPlayer {
             return max(compactVisibleWidth, expandedPagePreferredWidth)
         }
         return compactVisibleWidth
     }
 
+    var usesExternalCompactLayout: Bool {
+        displayMode == .externalDisplay && expandedPanel == nil
+    }
+
+    var compactBarHeight: CGFloat {
+        usesExternalCompactLayout ? externalCompactHeight : notchHeight
+    }
+
+    var effectiveWindowTopInset: CGFloat {
+        usesExternalCompactLayout ? 0 : windowTopInset
+    }
+
+    var effectiveWindowBottomInset: CGFloat {
+        usesExternalCompactLayout ? 0 : windowBottomInset
+    }
+
+    var showsToastLyrics: Bool {
+        toastShowsLyrics
+            && !toastLyricsDismissed
+            && isPlaying
+            && isFeatureEnabled(.nowPlaying)
+            && currentPresentation != nil
+            && expandedPanel == nil
+            && !showsVolumeChange
+            && !showsPluginStatus
+            && !showsBatteryLowWarning
+    }
+
     var compactCenterSpacing: CGFloat {
+        // IMPORTANT: When adding a new CompactWidgetStyle case, add a matching
+        // spacing entry here. The `default` branch is a safe fallback but may
+        // not produce the ideal visual layout for new widget combinations.
         switch (leadingWidget?.style, trailingWidget?.style) {
         case (.artwork?, .visualizer?):
             return 200
@@ -1128,6 +1547,9 @@ final class NotchOverlayModel {
     }
 
     var currentIslandHeight: CGFloat {
+        if usesExternalCompactLayout {
+            return externalCompactHeight
+        }
         if expandedPanel == .onboarding {
             return onboardingExpandedHeight
         }
@@ -1146,13 +1568,13 @@ final class NotchOverlayModel {
         if showsHoverChange {
             return expandedHeight
         }
-        return showsTrackChange ? expandedHeight : notchHeight
+        return (showsTrackChange || showsToastLyrics) ? expandedHeight : notchHeight
     }
 
     var panelSize: CGSize {
         CGSize(
             width: visibleWidth + (windowHorizontalInset * 2),
-            height: currentIslandHeight + windowTopInset + windowBottomInset
+            height: currentIslandHeight + effectiveWindowTopInset + effectiveWindowBottomInset
         )
     }
 
@@ -1363,6 +1785,30 @@ final class NotchOverlayModel {
             .nilIfEmpty
     }
 
+    func toastLyricsText(at date: Date = .now) -> String? {
+        if let activeIndex = activeLyricLineIndex(at: date) {
+            return syncedLyrics[activeIndex].text.nilIfEmpty
+        }
+
+        if let firstPlainLine = plainLyricsText?
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return firstPlainLine
+        }
+
+        switch lyricsLoadState {
+        case .idle:
+            return detailLine
+        case .loading:
+            return "Loading lyrics..."
+        case .unavailable:
+            return detailLine ?? "Lyrics unavailable"
+        case .ready:
+            return detailLine
+        }
+    }
+
     func updateNowPlaying(track: AppleMusicTrack) {
         guard isFeatureEnabled(.nowPlaying) else { return }
 
@@ -1371,6 +1817,7 @@ final class NotchOverlayModel {
         nowPlayingDurationSeconds = track.durationSeconds
         nowPlayingPlaybackPositionSeconds = max(0, track.playbackPositionSeconds ?? 0)
         nowPlayingPlaybackPositionUpdatedAt = .now
+        albumName = track.album.isEmpty ? nil : track.album
 
         let presentation = IslandPresentation(
             id: [track.title, track.artist, track.album].joined(separator: "||"),
@@ -1417,6 +1864,12 @@ final class NotchOverlayModel {
         }
     }
 
+    func setDisplayMode(_ mode: NotchOverlayDisplayMode) {
+        guard displayMode != mode else { return }
+        displayMode = mode
+        notifyLayoutChange()
+    }
+
     func showTrackChangeTemporarily() {
         collapseTask?.cancel()
         guard expandedPanel == nil else {
@@ -1447,12 +1900,42 @@ final class NotchOverlayModel {
         }
     }
 
+    @discardableResult
+    func dismissToastIfVisible() -> Bool {
+        let hadVisibleToast = showsTrackChange || showsToastLyrics
+        guard hadVisibleToast else { return false }
+
+        collapseTask?.cancel()
+        showsTrackText = false
+        showsTrackChange = false
+
+        if toastShowsLyrics {
+            toastLyricsDismissed = true
+        }
+
+        notifyLayoutChange()
+        return true
+    }
+
+    @discardableResult
+    func handleToastSpaceKey() -> Bool {
+        if dismissToastIfVisible() {
+            return true
+        }
+
+        guard toastShowsLyrics, toastLyricsDismissed else { return false }
+        toastLyricsDismissed = false
+        notifyLayoutChange()
+        return true
+    }
+
     func clearNowPlaying() {
         collapseTask?.cancel()
         lyricsTask?.cancel()
         currentPresentation = nil
         detailLine = nil
         sourceApp = nil
+        albumName = nil
         artworkData = nil
         resetVisualizerPalette()
         nowPlayingDurationSeconds = nil
@@ -1474,6 +1957,13 @@ final class NotchOverlayModel {
         refreshCompactWidgets()
         broadcastPluginEvent(.nowPlaying(nil))
         notifyLayoutChange()
+    }
+
+    func activateNowPlayingApp() {
+        guard let sourceApp, sourceApp != "unknown" else { return }
+        guard let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == sourceApp }) else { return }
+        runningApp.unhide()
+        runningApp.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
 
     func toggleMusicPlayer() {
@@ -1533,17 +2023,40 @@ final class NotchOverlayModel {
         UserDefaults.standard.set(true, forKey: Self.hasShownOnboardingKey)
         if expandedPanel == .onboarding {
             expandedPanel = nil
+            refreshCompactWidgets()
             notifyLayoutChange()
         }
     }
 
     func setHoverTitleVisible(_ isVisible: Bool) {
         guard isFeatureEnabled(.hoverTitle) else { return }
-        guard expandedPanel == nil, !showsTrackChange, !showsVolumeChange, currentPresentation != nil else { return }
-        guard showsHoverChange != isVisible || showsHoverText != isVisible else { return }
-        showsHoverChange = isVisible
-        showsHoverText = isVisible
-        notifyLayoutChange()
+        hoverHideTask?.cancel()
+        hoverHideTask = nil
+
+        guard expandedPanel == nil, !showsTrackChange, !showsVolumeChange, !showsPluginStatus, currentPresentation != nil else {
+            if !isVisible, showsHoverChange || showsHoverText {
+                showsHoverChange = false
+                showsHoverText = false
+                notifyLayoutChange()
+            }
+            return
+        }
+
+        if isVisible {
+            guard !showsHoverChange || !showsHoverText else { return }
+            showsHoverChange = true
+            showsHoverText = true
+            notifyLayoutChange()
+        } else {
+            hoverHideTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled, let self else { return }
+                guard self.showsHoverChange || self.showsHoverText else { return }
+                self.showsHoverChange = false
+                self.showsHoverText = false
+                self.notifyLayoutChange()
+            }
+        }
     }
 
     func showVolume(level: Double, outputDeviceName: String?) {
@@ -1559,8 +2072,10 @@ final class NotchOverlayModel {
         showsVolumeChange = true
         volumeLevel = max(0, min(1, level))
         volumeOutputDeviceName = outputDeviceName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        print("VolumeOverlay: show level=\(String(format: "%.3f", volumeLevel)) device=\(volumeOutputDeviceName ?? "unknown")")
-        broadcastPluginEvent(.volume(pluginVolumeSnapshot ?? PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)))
+        let currentLevel = volumeLevel
+        let currentDevice = volumeOutputDeviceName
+        appLog.debug("VolumeOverlay: show level=\(String(format: "%.3f", currentLevel)) device=\(currentDevice ?? "unknown")")
+        broadcastPluginEvent(.volume(PluginVolumeSnapshot(level: currentLevel, outputDeviceName: currentDevice)))
         notifyLayoutChange()
 
         extendVolumeOverlayVisibility(by: 2.6)
@@ -1577,20 +2092,40 @@ final class NotchOverlayModel {
         chargingWatts: Double?,
         previousStatus: (level: Int, isCharging: Bool, chargingWatts: Double?)?
     ) {
+        let didChange = batteryLevel != level
+            || batteryIsCharging != isCharging
+            || chargingWattsChanged(from: chargingPowerWatts, to: chargingWatts)
+
         batteryLevel = level
         batteryIsCharging = isCharging
         chargingPowerWatts = chargingWatts
+
+        var needsWidgetRefresh = didChange
 
         if isCharging,
            let chargingWatts,
            shouldShowChargingPowerIndicator(previousStatus: previousStatus, chargingWatts: chargingWatts) {
             showChargingPowerIndicator()
-        } else if !isCharging {
+            needsWidgetRefresh = true
+        } else if !isCharging, temporaryCompactWidgets[.trailing]?.identity == .builtIn(.chargingPower) {
             clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.chargingPower))
+            needsWidgetRefresh = true
         }
 
+        guard needsWidgetRefresh else { return }
         refreshCompactWidgets()
         notifyLayoutChange()
+    }
+
+    private func chargingWattsChanged(from oldValue: Double?, to newValue: Double?) -> Bool {
+        switch (oldValue, newValue) {
+        case (nil, nil):
+            return false
+        case let (oldValue?, newValue?):
+            return abs(oldValue - newValue) >= 0.1
+        default:
+            return true
+        }
     }
 
     func updateWeather(temperatureText: String?, symbolName: String?) {
@@ -1660,6 +2195,17 @@ final class NotchOverlayModel {
             updateLiveVisualizerLevels(Array(repeating: 5, count: 6), isAvailable: false)
         }
         visualizerModeChangeHandler?(mode)
+    }
+
+    func setToastLyricsVisible(_ isVisible: Bool) {
+        toastShowsLyrics = isVisible
+        toastLyricsDismissed = false
+        UserDefaults.standard.set(isVisible, forKey: Self.toastLyricsVisibleKey)
+        if isVisible {
+            collapseTask?.cancel()
+            showsTrackText = true
+        }
+        notifyLayoutChange()
     }
 
     func updateLiveVisualizerLevels(_ levels: [CGFloat], isAvailable: Bool) {
@@ -1774,10 +2320,12 @@ final class NotchOverlayModel {
         let pages = expandedWidgetPages
         guard let targetIndex = pages.firstIndex(where: { $0.id == id }) else { return }
 
-        if let currentPage = activeExpandedWidgetPage,
-           let currentIndex = pages.firstIndex(where: { $0.id == currentPage.id }),
+        if let currentPageID = currentExpandedPageID,
+           let currentIndex = pages.firstIndex(where: { $0.id == currentPageID }),
            currentIndex != targetIndex {
             expandedPageNavigationDirection = targetIndex > currentIndex ? .forward : .backward
+        } else {
+            expandedPageNavigationDirection = .forward
         }
 
         currentExpandedPageID = id
@@ -1814,53 +2362,34 @@ final class NotchOverlayModel {
         notifyLayoutChange()
     }
 
-    func widgetPriorityItems(for placement: CompactWidgetPlacement) -> [CompactWidgetPriorityItem] {
-        let builtIns = CompactWidgetKind.allCases
-            .filter { $0.placement == placement }
-            .map {
-                CompactWidgetPriorityItem(
-                    id: "builtin.\($0.rawValue)",
-                    identity: .builtIn($0),
-                    title: $0.title,
-                    placement: placement
-                )
-            }
-        let plugins = pluginWidgets
-            .filter {
-                switch ($0.placement, placement) {
-                case (.leading, .leading), (.trailing, .trailing):
-                    return true
-                default:
-                    return false
-                }
-            }
-            .map {
-                CompactWidgetPriorityItem(
-                    id: "plugin.\($0.id)",
-                    identity: .plugin($0.id),
-                    title: $0.title,
-                    placement: placement
-                )
-            }
-
-        return (builtIns + plugins).sorted { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
+    func widgetLayoutItems(for zone: CompactWidgetZone) -> [CompactWidgetLayoutItem] {
+        compactWidgetLayout[zone].compactMap { identity in
+            guard let title = compactWidgetTitle(for: identity) else { return nil }
+            return CompactWidgetLayoutItem(
+                id: "\(zone.storageKey).\(identity.storageToken)",
+                identity: identity,
+                title: title,
+                zone: zone
+            )
+        }
     }
 
-    func canMoveCompactWidget(_ identity: CompactWidgetIdentity, placement: CompactWidgetPlacement, direction: MoveDirection) -> Bool {
-        let items = widgetPriorityItems(for: placement)
-        guard let index = items.firstIndex(where: { $0.identity == identity }) else { return false }
+    func canMoveCompactWidget(_ identity: CompactWidgetIdentity, in zone: CompactWidgetZone, direction: MoveDirection) -> Bool {
+        let identities = compactWidgetLayout[zone]
+        guard let index = identities.firstIndex(of: identity) else { return false }
 
         switch direction {
         case .up:
             return index > 0
         case .down:
-            return index < items.count - 1
+            return index < identities.count - 1
         }
     }
 
-    func moveCompactWidget(_ identity: CompactWidgetIdentity, placement: CompactWidgetPlacement, direction: MoveDirection) {
-        var items = widgetPriorityItems(for: placement)
-        guard let index = items.firstIndex(where: { $0.identity == identity }) else { return }
+    func moveCompactWidget(_ identity: CompactWidgetIdentity, in zone: CompactWidgetZone, direction: MoveDirection) {
+        var layout = compactWidgetLayout
+        var identities = layout[zone]
+        guard let index = identities.firstIndex(of: identity) else { return }
 
         let targetIndex: Int
         switch direction {
@@ -1868,16 +2397,27 @@ final class NotchOverlayModel {
             guard index > 0 else { return }
             targetIndex = index - 1
         case .down:
-            guard index < items.count - 1 else { return }
+            guard index < identities.count - 1 else { return }
             targetIndex = index + 1
         }
 
-        items.swapAt(index, targetIndex)
+        identities.swapAt(index, targetIndex)
+        layout[zone] = identities
+        compactWidgetLayout = normalizedCompactWidgetLayout(layout)
+        saveCompactWidgetLayout()
+        refreshCompactWidgets()
+        notifyLayoutChange()
+    }
 
-        for (priority, item) in items.enumerated() {
-            setWidgetPriority(priority, for: item.identity)
+    func moveCompactWidget(_ identity: CompactWidgetIdentity, to targetZone: CompactWidgetZone) {
+        var layout = compactWidgetLayout
+        for zone in CompactWidgetZone.allCases {
+            layout[zone].removeAll { $0 == identity }
         }
+        layout[targetZone].append(identity)
 
+        compactWidgetLayout = normalizedCompactWidgetLayout(layout)
+        saveCompactWidgetLayout()
         refreshCompactWidgets()
         notifyLayoutChange()
     }
@@ -1956,46 +2496,105 @@ final class NotchOverlayModel {
     }
 
     private func refreshCompactWidgets() {
-        let builtInWidgets = [
-            pinnedFileWidget,
-            nowPlayingArtworkWidget,
-            batteryWidget,
-            nowPlayingVisualizerWidget,
-            weatherWidget,
-            pomodoroWidget,
-            chargingPowerWidget
-        ].compactMap { $0 }
-        let availableWidgets = builtInWidgets + pluginWidgets.map(pluginCompactWidget)
-
         let leading = temporaryCompactWidgets[.leading]
-            ?? availableWidgets
-                .filter { $0.placement == .leading }
-                .min { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
+            ?? firstAvailableCompactWidget(in: .leading, placement: .leading)
         let trailing = temporaryCompactWidgets[.trailing]
-            ?? availableWidgets
-                .filter { $0.placement == .trailing }
-                .min { widgetPriority(for: $0.identity) < widgetPriority(for: $1.identity) }
+            ?? firstAvailableCompactWidget(in: .trailing, placement: .trailing)
 
         compactWidgets = [leading, trailing].compactMap { $0 }
     }
 
-    private func widgetPriority(for identity: CompactWidgetIdentity) -> Int {
+    private func firstAvailableCompactWidget(in zone: CompactWidgetZone, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
+        compactWidgetLayout[zone].lazy.compactMap { self.compactWidget(for: $0, placement: placement) }.first
+    }
+
+    private func compactWidget(for identity: CompactWidgetIdentity, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
         switch identity {
         case .builtIn(let kind):
-            return compactWidgetPriorities[kind] ?? Int.max
+            return builtInWidget(kind, placement: placement)
         case .plugin(let id):
-            let key = Self.compactWidgetPriorityPrefix + "plugin." + id
-            return UserDefaults.standard.object(forKey: key) as? Int ?? (1_000 + (pluginWidgets.firstIndex(where: { $0.id == id }) ?? 0))
+            guard let descriptor = pluginWidgets.first(where: { $0.id == id }) else { return nil }
+            return pluginCompactWidget(from: descriptor, placement: placement)
         }
     }
 
-    private func setWidgetPriority(_ priority: Int, for identity: CompactWidgetIdentity) {
+    private func compactWidgetTitle(for identity: CompactWidgetIdentity) -> String? {
         switch identity {
         case .builtIn(let kind):
-            compactWidgetPriorities[kind] = priority
-            UserDefaults.standard.set(priority, forKey: Self.compactWidgetPriorityPrefix + kind.rawValue)
+            return kind.title
         case .plugin(let id):
-            UserDefaults.standard.set(priority, forKey: Self.compactWidgetPriorityPrefix + "plugin." + id)
+            return pluginWidgets.first(where: { $0.id == id })?.title
+        }
+    }
+
+    private func normalizedCompactWidgetLayout(_ layout: CompactWidgetLayout) -> CompactWidgetLayout {
+        var normalized = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
+        var seen: Set<CompactWidgetIdentity> = []
+
+        for zone in CompactWidgetZone.allCases {
+            for identity in layout[zone] where seen.insert(identity).inserted {
+                normalized[zone].append(identity)
+            }
+        }
+
+        for kind in CompactWidgetKind.allCases {
+            let identity = CompactWidgetIdentity.builtIn(kind)
+            guard !seen.contains(identity) else { continue }
+            normalized[Self.defaultZone(for: kind)].append(identity)
+            seen.insert(identity)
+        }
+
+        for descriptor in pluginWidgets.sorted(by: { $0.priority < $1.priority }) {
+            let identity = CompactWidgetIdentity.plugin(descriptor.id)
+            guard !seen.contains(identity) else { continue }
+            normalized.hidden.append(identity)
+            seen.insert(identity)
+        }
+
+        return normalized
+    }
+
+    private func saveCompactWidgetLayout() {
+        for zone in CompactWidgetZone.allCases {
+            UserDefaults.standard.set(
+                compactWidgetLayout[zone].map(\.storageToken),
+                forKey: Self.compactWidgetLayoutPrefix + zone.storageKey
+            )
+        }
+    }
+
+    private static func loadCompactWidgetLayout() -> CompactWidgetLayout {
+        let hasSavedLayout = CompactWidgetZone.allCases.contains {
+            UserDefaults.standard.object(forKey: compactWidgetLayoutPrefix + $0.storageKey) != nil
+        }
+        guard hasSavedLayout else { return defaultCompactWidgetLayout() }
+
+        var layout = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
+        for zone in CompactWidgetZone.allCases {
+            let tokens = UserDefaults.standard.stringArray(forKey: compactWidgetLayoutPrefix + zone.storageKey) ?? []
+            layout[zone] = tokens.compactMap(CompactWidgetIdentity.init(storageToken:))
+        }
+        return layout
+    }
+
+    private static func defaultCompactWidgetLayout() -> CompactWidgetLayout {
+        CompactWidgetLayout(
+            leading: CompactWidgetKind.allCases
+                .filter { defaultZone(for: $0) == .leading }
+                .map { .builtIn($0) },
+            trailing: CompactWidgetKind.allCases
+                .filter { defaultZone(for: $0) == .trailing }
+                .map { .builtIn($0) },
+            hidden: []
+        )
+    }
+
+    private static func defaultZone(for kind: CompactWidgetKind) -> CompactWidgetZone {
+        switch kind.placement {
+        case .leading:
+            return .leading
+        case .trailing:
+            return .trailing
         }
     }
 
@@ -2031,6 +2630,37 @@ final class NotchOverlayModel {
             ]).width
             return ceil(textWidth) + 42
         }
+    }
+
+    private func builtInWidget(_ kind: CompactWidgetKind, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
+        let source: CompactIslandWidget?
+        switch kind {
+        case .pinnedFile:
+            source = pinnedFileWidget
+        case .nowPlayingArtwork:
+            source = nowPlayingArtworkWidget
+        case .battery:
+            source = batteryWidget
+        case .nowPlayingVisualizer:
+            source = nowPlayingVisualizerWidget
+        case .weather:
+            source = weatherWidget
+        case .pomodoro:
+            source = pomodoroWidget
+        case .chargingPower:
+            source = chargingPowerWidget
+        }
+
+        guard let source else { return nil }
+        return CompactIslandWidget(
+            id: "\(source.id)-\(placement.storageKey)",
+            identity: source.identity,
+            title: source.title,
+            placement: placement,
+            style: source.style,
+            preferredWidth: source.preferredWidth,
+            artworkData: source.artworkData
+        )
     }
 
     private var batteryWidget: CompactIslandWidget? {
@@ -2177,16 +2807,7 @@ final class NotchOverlayModel {
         )
     }
 
-    private func pluginCompactWidget(from descriptor: PluginWidgetDescriptor) -> CompactIslandWidget {
-        let placement: CompactWidgetPlacement = {
-            switch descriptor.placement {
-            case .leading:
-                return .leading
-            case .trailing:
-                return .trailing
-            }
-        }()
-
+    private func pluginCompactWidget(from descriptor: PluginWidgetDescriptor, placement: CompactWidgetPlacement) -> CompactIslandWidget {
         let style: CompactWidgetStyle = {
             switch descriptor.style {
             case .artwork:
@@ -2205,7 +2826,7 @@ final class NotchOverlayModel {
         }()
 
         return CompactIslandWidget(
-            id: "plugin-widget-\(descriptor.id)",
+            id: "plugin-widget-\(descriptor.id)-\(placement.storageKey)",
             identity: .plugin(descriptor.id),
             title: descriptor.title,
             placement: placement,
@@ -2467,24 +3088,24 @@ final class NotchOverlayModel {
     private func extendVolumeOverlayVisibility(by duration: TimeInterval) {
         let deadline = Date().addingTimeInterval(duration)
         volumeOverlayVisibleUntil = deadline
-        print("VolumeOverlay: extend deadline=\(deadline.timeIntervalSince1970)")
+        appLog.debug("VolumeOverlay: extend deadline=\(deadline.timeIntervalSince1970)")
 
         guard volumeHideTask == nil else {
-            print("VolumeOverlay: hide watcher already running")
+            appLog.debug("VolumeOverlay: deadline extended, watcher already running")
             return
         }
 
-        print("VolumeOverlay: start hide watcher")
+        appLog.debug("VolumeOverlay: start hide watcher")
 
         volumeHideTask = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
                 guard let visibleUntil = self.volumeOverlayVisibleUntil else { break }
                 let remaining = visibleUntil.timeIntervalSinceNow
 
-                print("VolumeOverlay: watcher remaining=\(String(format: "%.3f", remaining))")
+                appLog.debug("VolumeOverlay: watcher remaining=\(String(format: "%.3f", remaining))")
 
                 if remaining <= 0 {
-                    print("VolumeOverlay: deadline reached, dismissing")
+                    appLog.debug("VolumeOverlay: deadline reached, dismissing")
                     self.dismissVolumeOverlay()
                     break
                 }
@@ -2496,7 +3117,7 @@ final class NotchOverlayModel {
     }
 
     private func dismissVolumeOverlay(resetLevel: Bool = false) {
-        print("VolumeOverlay: dismiss resetLevel=\(resetLevel)")
+        appLog.debug("VolumeOverlay: dismiss resetLevel=\(resetLevel)")
         volumeHideTask?.cancel()
         volumeHideTask = nil
         volumeOverlayVisibleUntil = nil
@@ -2536,7 +3157,6 @@ final class NotchOverlayModel {
         pomodoroIsRunning = false
         pomodoroTimerTask?.cancel()
         pomodoroTimerTask = nil
-        clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.pomodoro))
     }
 
     private func shouldShowChargingPowerIndicator(
@@ -2663,6 +3283,8 @@ final class NotchOverlayModel {
     }
 
     func bridgeUpsertPage(_ payload: BridgePagePayload, clientID: String) {
+        // removeAll + append ensures only the latest version of the page is
+        // registered. Old closures are discarded automatically.
         let descriptor = PluginExpandedPageDescriptor(
             id: payload.id,
             title: payload.title,
@@ -2722,7 +3344,7 @@ final class NotchOverlayModel {
         pluginManager?.setPluginEnabled(id: id, isEnabled: isEnabled)
     }
 
-    func pluginSettingsSections(for pluginID: String) -> [PluginSettingsSectionDescriptor] {
+    func settingsSectionsForPlugin(_ pluginID: String) -> [PluginSettingsSectionDescriptor] {
         pluginSettingsSections.filter { $0.id.hasPrefix("\(pluginID)::") }
     }
 
@@ -2773,10 +3395,8 @@ final class NotchOverlayModel {
         )
         pluginWidgets.removeAll { $0.id == scoped.id }
         pluginWidgets.append(scoped)
-        let key = Self.compactWidgetPriorityPrefix + "plugin." + scoped.id
-        if UserDefaults.standard.object(forKey: key) == nil {
-            UserDefaults.standard.set(1_000 + descriptor.priority, forKey: key)
-        }
+        compactWidgetLayout = normalizedCompactWidgetLayout(compactWidgetLayout)
+        saveCompactWidgetLayout()
         refreshCompactWidgets()
         notifyLayoutChange()
     }
@@ -2828,7 +3448,7 @@ final class NotchOverlayModel {
         return PluginNowPlayingSnapshot(
             title: currentPresentation.detailLine?.components(separatedBy: " - ").first ?? "",
             artist: currentPresentation.detailLine?.components(separatedBy: " - ").dropFirst().joined(separator: " - ") ?? "",
-            album: "",
+            album: albumName ?? "",
             sourceApp: sourceApp,
             isPlaying: isPlaying
         )
@@ -2843,7 +3463,6 @@ final class NotchOverlayModel {
     }
 
     private var pluginVolumeSnapshot: PluginVolumeSnapshot? {
-        guard showsVolumeChange || volumeLevel > 0 else { return nil }
         return PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)
     }
 
@@ -2875,7 +3494,7 @@ final class NotchOverlayModel {
         showsTrackText = false
         showsHoverChange = false
         showsHoverText = false
-        showsVolumeChange = false
+        dismissVolumeOverlay()
         showsPluginStatus = true
         notifyLayoutChange()
 
@@ -2953,6 +3572,12 @@ final class NotchOverlayModel {
     private static func restorePinnedFileURL() -> URL? {
         guard let bookmarkData = UserDefaults.standard.data(forKey: pinnedFileBookmarkKey) else { return nil }
         var isStale = false
-        return try? URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale)
+        guard let url = try? URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale) else {
+            return nil
+        }
+        if isStale, let newBookmark = try? url.bookmarkData() {
+            UserDefaults.standard.set(newBookmark, forKey: pinnedFileBookmarkKey)
+        }
+        return url
     }
 }

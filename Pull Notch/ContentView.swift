@@ -25,7 +25,7 @@ struct ContentView: View {
             height: overlayModel.panelSize.height,
             alignment: .top
         )
-        .padding(.top, overlayModel.windowTopInset)
+        .padding(.top, overlayModel.effectiveWindowTopInset)
         .background(Color.clear)
         .contentShape(Rectangle())
         .dropDestination(for: URL.self) { urls, _ in
@@ -61,29 +61,37 @@ struct ContentView: View {
         )
     }
 
+    @ViewBuilder
     private var islandShape: some View {
+        if overlayModel.usesExternalCompactLayout {
+            externalCompactIsland
+        } else {
+            standardIslandShape
+        }
+    }
+
+    private var standardIslandShape: some View {
         ZStack(alignment: .top) {
             DynamicIslandShape(cornerRadius: 22)
                 .fill(islandFill)
                 .frame(width: overlayModel.visibleWidth, height: overlayModel.currentIslandHeight)
-                .opacity((overlayModel.showsTrackChange || overlayModel.expandedPanel == .musicPlayer || overlayModel.showsHoverChange || overlayModel.showsVolumeChange) ? 1 : 0)
+                .opacity((overlayModel.showsTrackChange || overlayModel.showsToastLyrics || overlayModel.expandedPanel == .musicPlayer || overlayModel.showsHoverChange || overlayModel.showsVolumeChange) ? 1 : 0)
                 .overlay(alignment: .bottom) {
                     expandedContent
                 }
-                .animation(.easeOut(duration: 0.18), value: overlayModel.showsTrackChange)
-                .animation(musicPlayerExpansionAnimation, value: overlayModel.expandedPanel == .musicPlayer)
-                .animation(.easeOut(duration: 0.16), value: overlayModel.showsHoverChange)
-                .animation(.easeOut(duration: 0.16), value: overlayModel.showsVolumeChange)
+                .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
+                .animation(islandGeometryAnimation, value: overlayModel.currentIslandHeight)
+                .animation(islandContentAnimation, value: transientPresentationKey)
 
             DynamicIslandShape(cornerRadius: 22)
                 .fill(islandFill)
-                .frame(width: overlayModel.visibleWidth, height: overlayModel.notchHeight)
+                .frame(width: overlayModel.visibleWidth, height: overlayModel.compactBarHeight)
                 .overlay(alignment: .top) {
                     ZStack {
                         if overlayModel.expandedPanel != .musicPlayer {
                             compactBar
                                 .padding(.top, 4)
-                                .transition(.scale(scale: 0.92, anchor: .center).combined(with: .opacity))
+                                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .center)))
                         }
                     }
                 }
@@ -111,8 +119,9 @@ struct ContentView: View {
                     }
                 }
                 .allowsHitTesting(overlayModel.expandedPanel != .musicPlayer)
-                .animation(musicPlayerExpansionAnimation, value: overlayModel.expandedPanel == .musicPlayer)
+                .animation(islandGeometryAnimation, value: overlayModel.expandedPanel == .musicPlayer)
         }
+        .frame(width: overlayModel.panelSize.width, alignment: .center)
         .overlay {
             if isDropTargeted {
                 DynamicIslandShape(cornerRadius: 22)
@@ -125,14 +134,86 @@ struct ContentView: View {
             }
         }
         .scaleEffect(hoverScale)
-        .animation(.easeOut(duration: 0.14), value: hoverScale)
+        .animation(.smooth(duration: 0.18), value: hoverScale)
+    }
+
+    private var externalCompactIsland: some View {
+        DynamicIslandShape(cornerRadius: 12)
+            .fill(islandFill)
+            .frame(width: overlayModel.visibleWidth, height: overlayModel.externalCompactHeight)
+            .overlay {
+                HStack(spacing: 10) {
+                    compactWidgetSlot(overlayModel.leadingWidget)
+                        .frame(minWidth: overlayModel.leadingWidgetWidth, alignment: .leading)
+
+                    externalCompactToast
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .clipped()
+
+                    compactWidgetSlot(overlayModel.trailingWidget)
+                        .frame(minWidth: overlayModel.trailingWidgetWidth, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+            }
+            .contentShape(DynamicIslandShape(cornerRadius: 12))
+            .onTapGesture {
+                if overlayModel.expandedPanel != .onboarding {
+                    overlayModel.toggleMusicPlayer()
+                }
+            }
+            .contextMenu {
+                if overlayModel.expandedPanel == nil {
+                    Button {
+                        overlayModel.openSettingsWindow()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label("Quit Pull Notch", systemImage: "power")
+                    }
+                }
+            }
+            .frame(width: overlayModel.panelSize.width, alignment: .center)
+            .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
+            .animation(islandContentAnimation, value: transientPresentationKey)
+    }
+
+    @ViewBuilder
+    private var externalCompactToast: some View {
+        if overlayModel.showsToastLyrics {
+            TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+                if let lyricText = overlayModel.toastLyricsText(at: timeline.date) {
+                    MarqueeText(
+                        text: lyricText,
+                        font: .system(size: 12, weight: .medium),
+                        color: .gray,
+                        leadingSystemImage: "quote.opening"
+                    )
+                    .id(lyricText)
+                }
+            }
+        } else if overlayModel.showsTrackText, let detailLine = overlayModel.detailLine {
+            MarqueeText(
+                text: detailLine,
+                font: .system(size: 12, weight: .medium),
+                color: .gray
+            )
+            .id(detailLine)
+        } else {
+            Color.clear
+        }
     }
 
     private var hoverScale: CGFloat {
         if overlayModel.showsHoverChange || overlayModel.expandedPanel == .musicPlayer {
             return 1
         }
-        return isHovering ? 1.04 : 1
+        return isHovering ? 1.018 : 1
     }
 
     private var islandFill: Color {
@@ -140,12 +221,35 @@ struct ContentView: View {
     }
 
     private var musicPlayerExpansionAnimation: Animation {
-        .spring(response: 0.34, dampingFraction: 0.86)
+        .spring(response: 0.42, dampingFraction: 0.9)
+    }
+
+    private var islandGeometryAnimation: Animation {
+        .spring(response: 0.36, dampingFraction: 0.92)
+    }
+
+    private var islandContentAnimation: Animation {
+        .easeOut(duration: 0.18)
+    }
+
+    private var transientPresentationKey: String {
+        [
+            overlayModel.expandedPanel == .musicPlayer ? "player" : nil,
+            overlayModel.expandedPanel == .onboarding ? "onboarding" : nil,
+            overlayModel.showsVolumeChange ? "volume" : nil,
+            overlayModel.showsPluginStatus ? "plugin" : nil,
+            overlayModel.showsBatteryLowWarning ? "battery" : nil,
+            overlayModel.showsHoverChange ? "hover" : nil,
+            overlayModel.showsToastLyrics ? "lyrics-toast" : nil,
+            overlayModel.showsTrackChange ? "track" : nil
+        ]
+        .compactMap { $0 }
+        .first ?? "compact"
     }
 
     private var musicPlayerExpansionTransition: AnyTransition {
         .modifier(
-            active: CenterExpansionModifier(scale: 0.92, opacity: 0, yOffset: -20),
+            active: CenterExpansionModifier(scaleX: 0.72, scaleY: 0.92, opacity: 0, yOffset: -8),
             identity: CenterExpansionModifier(scale: 1, opacity: 1, yOffset: 0)
         )
     }
@@ -157,7 +261,7 @@ struct ContentView: View {
             compactWidgetSlot(overlayModel.trailingWidget)
         }
         .padding(.horizontal, 12)
-        .frame(width: overlayModel.visibleWidth, height: overlayModel.notchHeight)
+        .frame(width: overlayModel.visibleWidth, height: overlayModel.compactBarHeight)
     }
 
     private func compactWidgetSlot(_ widget: CompactIslandWidget?) -> some View {
@@ -166,7 +270,7 @@ struct ContentView: View {
                 .id(widget?.id ?? "empty")
                 .transition(.opacity)
         }
-        .animation(.easeInOut(duration: 0.18), value: widget?.id)
+        .animation(.easeOut(duration: 0.14), value: widget?.id)
     }
 
     @ViewBuilder
@@ -185,7 +289,7 @@ struct ContentView: View {
                 circularProgressWidget(systemName: systemName, progress: progress, isActive: isActive, text: text)
             case .custom(let render):
                 render()
-                    .frame(width: widget.preferredWidth, height: overlayModel.notchHeight)
+                    .frame(width: widget.preferredWidth, height: overlayModel.compactBarHeight)
             }
         } else {
             Color.clear
@@ -281,7 +385,7 @@ struct ContentView: View {
                     .fill(visualizerBarColor(at: index, total: barHeights.count))
                     .frame(width: 2.5, height: isActive ? height : 5)
                     .animation(
-                        .easeInOut(duration: 0.22).delay(Double(index) * 0.03),
+                        .smooth(duration: 0.18).delay(Double(index) * 0.018),
                         value: height
                     )
             }
@@ -293,9 +397,10 @@ struct ContentView: View {
                 return
             }
 
-            while isActive && !overlayModel.usesRealNowPlayingVisualizer {
+            while !Task.isCancelled {
+                guard isActive, !overlayModel.usesRealNowPlayingVisualizer else { return }
                 visualizerHeights = (0..<6).map { _ in .random(in: 7...21) }
-                try? await Task.sleep(for: .milliseconds(180))
+                try? await Task.sleep(for: .milliseconds(155))
             }
         }
     }
@@ -367,17 +472,18 @@ struct ContentView: View {
         } else if overlayModel.showsHoverChange {
             hoverTitleBanner
                 .opacity(overlayModel.showsHoverText ? 1 : 0)
-                .offset(y: overlayModel.showsHoverText ? 0 : -4)
+                .offset(y: overlayModel.showsHoverText ? 0 : -2)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
-                .animation(.easeOut(duration: 0.2), value: overlayModel.showsHoverText)
+                .animation(.smooth(duration: 0.18), value: overlayModel.showsHoverText)
         } else {
             trackChangeBanner
-                .opacity(overlayModel.showsTrackText ? 1 : 0)
-                .offset(y: overlayModel.showsTrackText ? 0 : -4)
+                .opacity((overlayModel.showsTrackText || overlayModel.showsToastLyrics) ? 1 : 0)
+                .offset(y: (overlayModel.showsTrackText || overlayModel.showsToastLyrics) ? 0 : -2)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
-                .animation(.easeOut(duration: 0.2), value: overlayModel.showsTrackText)
+                .animation(.smooth(duration: 0.18), value: overlayModel.showsTrackText)
+                .animation(.smooth(duration: 0.18), value: overlayModel.showsToastLyrics)
         }
     }
 
@@ -513,7 +619,21 @@ struct ContentView: View {
 
     @ViewBuilder
     private var trackChangeBanner: some View {
-        if let detailLine = overlayModel.detailLine {
+        if overlayModel.showsToastLyrics {
+            TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+                if let lyricText = overlayModel.toastLyricsText(at: timeline.date) {
+                    MarqueeText(
+                        text: lyricText,
+                        font: .system(size: 12, weight: .medium),
+                        color: .gray,
+                        leadingSystemImage: "quote.opening"
+                    )
+                    .id(lyricText)
+                    .frame(width: overlayModel.visibleWidth - 28, alignment: .leading)
+                    .clipped()
+                }
+            }
+        } else if let detailLine = overlayModel.detailLine {
             MarqueeText(
                 text: detailLine,
                 font: .system(size: 12, weight: .medium),
@@ -526,15 +646,15 @@ struct ContentView: View {
     }
 
     private var musicPlayerPanel: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack(alignment: .top) {
             activeExpandedPageBody
                 .id(activeExpandedPageID)
                 .transition(.opacity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .frame(width: overlayModel.visibleWidth - 28, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(width: overlayModel.visibleWidth - 28, alignment: .center)
         .clipped()
-        .animation(.easeInOut(duration: 0.2), value: activeExpandedPageID)
+        .animation(.smooth(duration: 0.18), value: activeExpandedPageID)
     }
 
     @ViewBuilder
@@ -615,6 +735,10 @@ struct ContentView: View {
                 }
                 .frame(width: 96, height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .onTapGesture {
+                    overlayModel.activateNowPlayingApp()
+                }
                 .offset(y: -6)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -734,7 +858,7 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.easeInOut(duration: 0.24), value: lyricLinesIdentity(at: timeline.date))
+                .animation(.smooth(duration: 0.2), value: lyricLinesIdentity(at: timeline.date))
             }
         }
         .padding(.horizontal, 12)
@@ -1093,13 +1217,28 @@ struct ContentView: View {
 }
 
 private struct CenterExpansionModifier: ViewModifier {
-    let scale: CGFloat
+    let scaleX: CGFloat
+    let scaleY: CGFloat
     let opacity: Double
     let yOffset: CGFloat
 
+    init(scale: CGFloat, opacity: Double, yOffset: CGFloat) {
+        self.scaleX = scale
+        self.scaleY = scale
+        self.opacity = opacity
+        self.yOffset = yOffset
+    }
+
+    init(scaleX: CGFloat, scaleY: CGFloat, opacity: Double, yOffset: CGFloat) {
+        self.scaleX = scaleX
+        self.scaleY = scaleY
+        self.opacity = opacity
+        self.yOffset = yOffset
+    }
+
     func body(content: Content) -> some View {
         content
-            .scaleEffect(scale, anchor: .center)
+            .scaleEffect(x: scaleX, y: scaleY, anchor: .top)
             .opacity(opacity)
             .offset(y: yOffset)
     }
@@ -1158,6 +1297,10 @@ private struct MarqueeText: View {
     @State private var textWidth: CGFloat = 0
     @State private var animate = false
 
+    private var animationID: String {
+        "\(text)-\(Int(availableWidth.rounded()))-\(Int(textWidth.rounded()))"
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
@@ -1174,34 +1317,25 @@ private struct MarqueeText: View {
                 }
             }
             .clipped()
-            .onAppear {
-                availableWidth = geometry.size.width
-                animate = false
-                if textWidth > geometry.size.width {
-                    withAnimation(.linear(duration: 7).repeatForever(autoreverses: false)) {
-                        animate = true
-                    }
-                }
-            }
+            .onAppear { availableWidth = geometry.size.width }
             .onChange(of: geometry.size.width) { _, newValue in
                 availableWidth = newValue
-                animate = false
-                if textWidth > newValue {
-                    withAnimation(.linear(duration: 7).repeatForever(autoreverses: false)) {
-                        animate = true
-                    }
-                }
             }
-            .onChange(of: textWidth) { _, newValue in
+            .task(id: animationID) {
                 animate = false
-                if newValue > availableWidth, availableWidth > 0 {
-                    withAnimation(.linear(duration: 7).repeatForever(autoreverses: false)) {
-                        animate = true
-                    }
+                guard textWidth > availableWidth, availableWidth > 0 else { return }
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                withAnimation(.linear(duration: marqueeDuration).repeatForever(autoreverses: false)) {
+                    animate = true
                 }
             }
         }
         .frame(height: 16)
+    }
+
+    private var marqueeDuration: TimeInterval {
+        max(7, TimeInterval((textWidth + 24) / 22))
     }
 
     private var marqueeLabel: some View {

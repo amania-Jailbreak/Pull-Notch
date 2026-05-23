@@ -54,6 +54,7 @@ enum LyricsProvider: String, Sendable {
     case musanovaKit = "MusanovaKit"
     case qqMusic = "QQ Music"
     case netEase = "NetEase"
+    case amaniaLyrics = "Amania Lyrics"
 }
 
 struct ResolvedLyrics: Sendable {
@@ -84,9 +85,68 @@ enum NowPlayingVisualizerMode: String {
     case real
 }
 
-enum CompactWidgetPlacement: Equatable {
+enum CompactWidgetPlacement: Equatable, Hashable {
     case leading
     case trailing
+
+    var storageKey: String {
+        switch self {
+        case .leading:
+            return "leading"
+        case .trailing:
+            return "trailing"
+        }
+    }
+}
+
+enum CompactWidgetZone: String, CaseIterable, Identifiable {
+    case leading
+    case trailing
+    case hidden
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .leading:
+            return "Left Slot"
+        case .trailing:
+            return "Right Slot"
+        case .hidden:
+            return "Hidden"
+        }
+    }
+
+    var storageKey: String { rawValue }
+}
+
+struct CompactWidgetLayout {
+    var leading: [CompactWidgetIdentity]
+    var trailing: [CompactWidgetIdentity]
+    var hidden: [CompactWidgetIdentity]
+
+    subscript(zone: CompactWidgetZone) -> [CompactWidgetIdentity] {
+        get {
+            switch zone {
+            case .leading:
+                return leading
+            case .trailing:
+                return trailing
+            case .hidden:
+                return hidden
+            }
+        }
+        set {
+            switch zone {
+            case .leading:
+                leading = newValue
+            case .trailing:
+                trailing = newValue
+            case .hidden:
+                hidden = newValue
+            }
+        }
+    }
 }
 
 enum MoveDirection {
