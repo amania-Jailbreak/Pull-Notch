@@ -79,6 +79,7 @@ struct ContentView: View {
                 .overlay(alignment: .bottom) {
                     expandedContent
                 }
+                .clipShape(DynamicIslandShape(cornerRadius: 22))
                 .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
                 .animation(islandGeometryAnimation, value: overlayModel.currentIslandHeight)
                 .animation(islandContentAnimation, value: transientPresentationKey)
@@ -249,8 +250,8 @@ struct ContentView: View {
 
     private var musicPlayerExpansionTransition: AnyTransition {
         .modifier(
-            active: CenterExpansionModifier(scaleX: 0.72, scaleY: 0.92, opacity: 0, yOffset: -8),
-            identity: CenterExpansionModifier(scale: 1, opacity: 1, yOffset: 0)
+            active: CenterExpansionModifier(scale: 1, opacity: 0, yOffset: 8, blurRadius: 10),
+            identity: CenterExpansionModifier(scale: 1, opacity: 1, yOffset: 0, blurRadius: 0)
         )
     }
 
@@ -1221,24 +1222,28 @@ private struct CenterExpansionModifier: ViewModifier {
     let scaleY: CGFloat
     let opacity: Double
     let yOffset: CGFloat
+    let blurRadius: CGFloat
 
-    init(scale: CGFloat, opacity: Double, yOffset: CGFloat) {
+    init(scale: CGFloat, opacity: Double, yOffset: CGFloat, blurRadius: CGFloat = 0) {
         self.scaleX = scale
         self.scaleY = scale
         self.opacity = opacity
         self.yOffset = yOffset
+        self.blurRadius = blurRadius
     }
 
-    init(scaleX: CGFloat, scaleY: CGFloat, opacity: Double, yOffset: CGFloat) {
+    init(scaleX: CGFloat, scaleY: CGFloat, opacity: Double, yOffset: CGFloat, blurRadius: CGFloat = 0) {
         self.scaleX = scaleX
         self.scaleY = scaleY
         self.opacity = opacity
         self.yOffset = yOffset
+        self.blurRadius = blurRadius
     }
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(x: scaleX, y: scaleY, anchor: .top)
+            .scaleEffect(x: scaleX, y: scaleY, anchor: UnitPoint(x: 0.5, y: 0))
+            .blur(radius: blurRadius)
             .opacity(opacity)
             .offset(y: yOffset)
     }

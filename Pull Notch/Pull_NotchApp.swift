@@ -1478,6 +1478,20 @@ final class NotchOverlayModel {
         return compactVisibleWidth
     }
 
+    var panelContentWidth: CGFloat {
+        var width = compactVisibleWidth
+
+        if displayMode == .externalDisplay {
+            width = max(width, externalCompactWidth)
+        }
+
+        if !expandedWidgetPages.isEmpty {
+            width = max(width, expandedMaxPreferredWidth)
+        }
+
+        return width
+    }
+
     var usesExternalCompactLayout: Bool {
         displayMode == .externalDisplay && expandedPanel == nil
     }
@@ -1573,7 +1587,7 @@ final class NotchOverlayModel {
 
     var panelSize: CGSize {
         CGSize(
-            width: visibleWidth + (windowHorizontalInset * 2),
+            width: panelContentWidth + (windowHorizontalInset * 2),
             height: currentIslandHeight + effectiveWindowTopInset + effectiveWindowBottomInset
         )
     }
@@ -1660,7 +1674,27 @@ final class NotchOverlayModel {
     }
 
     var expandedPagePreferredWidth: CGFloat {
-        switch activeExpandedBuiltInPage {
+        guard let activeExpandedWidgetPage else { return compactVisibleWidth }
+        return preferredWidth(for: activeExpandedWidgetPage)
+    }
+
+    var expandedMaxPreferredWidth: CGFloat {
+        expandedWidgetPages
+            .map(preferredWidth(for:))
+            .reduce(compactVisibleWidth, max)
+    }
+
+    private func preferredWidth(for page: ExpandedPageDescriptor) -> CGFloat {
+        switch page.source {
+        case .plugin:
+            return page.preferredWidth ?? compactVisibleWidth
+        case .builtIn(let builtInPage):
+            return preferredWidth(for: builtInPage)
+        }
+    }
+
+    private func preferredWidth(for page: ExpandedWidgetPageKind) -> CGFloat {
+        switch page {
         case .nowPlaying:
             let titleWidth = textWidth(
                 detailLine?.components(separatedBy: " - ").first ?? "Not Playing",
@@ -1708,8 +1742,6 @@ final class NotchOverlayModel {
                 font: .systemFont(ofSize: 12, weight: .medium)
             )
             return min(520, max(420, timerWidth + phaseWidth + 200))
-        case nil:
-            return activeExpandedWidgetPage?.preferredWidth ?? compactVisibleWidth
         }
     }
 
