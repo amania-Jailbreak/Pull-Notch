@@ -44,6 +44,14 @@ Pull Notchは `localhost:38591` でJSON newline形式の簡易ブリッジを受
 
 ボタンは `POST` のみ実行します。`https` URL、または `http://localhost` / `http://127.0.0.1` / `http://[::1]` が指定できます。
 
+### notification
+
+`setPage` で `notification: true` を指定すると、ページ登録後に自動で拡大表示されます。
+
+### postExit
+
+ボタン要素に `postExit: true` を付けると、POST 完了後に自動で拡大表示を閉じます。
+
 ### 動作確認
 
 Pull Notchを起動した状態で、以下を実行するとウィジェットと拡張ページを登録し、ページ内ボタンのPOST先もローカルで受けます。

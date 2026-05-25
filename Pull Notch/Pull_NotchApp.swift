@@ -3315,17 +3315,34 @@ final class NotchOverlayModel {
     }
 
     func bridgeUpsertPage(_ payload: BridgePagePayload, clientID: String) {
-        // removeAll + append ensures only the latest version of the page is
-        // registered. Old closures are discarded automatically.
         let descriptor = PluginExpandedPageDescriptor(
             id: payload.id,
             title: payload.title,
             preferredWidth: CGFloat(payload.preferredWidth ?? 360)
-        ) {
-            AnyView(BridgePageView(payload: payload))
+        ) { [weak self] in
+            AnyView(BridgePageView(payload: payload, onDismiss: { self?.dismissExpandedPanel() }))
         }
 
         registerPluginExpandedPage(descriptor, pluginID: bridgePluginID(for: clientID))
+
+        if payload.notification == true {
+            let scopedID = "\(bridgePluginID(for: clientID))::\(payload.id)"
+            let pageID = "plugin:\(scopedID)"
+
+            if expandedPanel != .musicPlayer {
+                expandedPanel = .musicPlayer
+                ensureExpandedWidgetPage()
+                dismissVolumeOverlay()
+                showsPluginStatus = false
+                pluginStatusMessage = nil
+                showsTrackChange = false
+                showsTrackText = false
+                perform(.generic)
+            }
+
+            selectExpandedWidgetPage(id: pageID)
+            notifyLayoutChange()
+        }
     }
 
     func bridgeRemovePage(id: String, clientID: String) {

@@ -115,6 +115,7 @@ def run_smoke_test(keep_alive: bool) -> None:
                 "id": "panel",
                 "title": "Python Test",
                 "preferredWidth": 420,
+                "notification": True,
                 "elements": [
                     {"type": "headline", "text": "Python Bridge Test"},
                     {"type": "text", "text": "Edit the message, then press POST."},
@@ -132,16 +133,20 @@ def run_smoke_test(keep_alive: bool) -> None:
                         "postURL": f"http://localhost:{POST_PORT}/deploy",
                         "body": {"message": "$message", "source": "python-smoke"},
                     },
+                    {
+                        "type": "button",
+                        "title": "POST & Close",
+                        "systemName": "xmark",
+                        "postURL": f"http://localhost:{POST_PORT}/deploy",
+                        "body": {"message": "$message", "source": "python-smoke"},
+                        "postExit": True,
+                    },
                 ],
             },
         }))
 
-        assert_ok(send_bridge_request({
-            "id": "open",
-            "method": "openPlayer",
-        }))
-
-        print("Smoke test payloads sent. Open Pull Notch, switch to 'Python Test', and press POST.")
+        print("Smoke test payloads sent. Pull Notch should auto-expand to 'Python Test'.")
+        print("Press 'POST & Close' to POST and dismiss the panel.")
         if keep_alive:
             print("Press Ctrl+C to stop the POST receiver.")
             while True:

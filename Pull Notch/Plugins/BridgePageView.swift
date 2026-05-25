@@ -3,6 +3,7 @@ import SwiftUI
 
 struct BridgePageView: View {
     let payload: BridgePagePayload
+    var onDismiss: (() -> Void)?
 
     @State private var textValues: [String: String] = [:]
     @State private var postingElementID: String?
@@ -209,6 +210,10 @@ struct BridgePageView: View {
             statusMessage = (200..<300).contains(statusCode) ? "POST sent" : "POST failed (HTTP \(statusCode))"
         } catch {
             statusMessage = "POST failed: \(error.localizedDescription)"
+        }
+
+        if element.postExit == true {
+            onDismiss?()
         }
     }
 

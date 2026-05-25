@@ -134,6 +134,7 @@ struct BridgePagePayload: Codable, Sendable {
     let body: String?
     let footnote: String?
     let elements: [BridgePageElementPayload]?
+    let notification: Bool?
 }
 
 struct BridgePageElementPayload: Codable, Sendable {
@@ -147,6 +148,7 @@ struct BridgePageElementPayload: Codable, Sendable {
     let placeholder: String?
     let postURL: String?
     let body: [String: String]?
+    let postExit: Bool?
 }
 
 struct BridgePluginRuntimeSnapshot: Codable, Sendable {
