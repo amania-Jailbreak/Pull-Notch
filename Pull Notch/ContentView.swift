@@ -964,7 +964,11 @@ struct ContentView: View {
             case .builtIn(.pomodoro):
                 pomodoroExpandedPage
             case .plugin:
-                EmptyView()
+                if let render = descriptor.render {
+                    render()
+                } else {
+                    EmptyView()
+                }
             }
         case nil:
             EmptyView()

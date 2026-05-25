@@ -133,6 +133,20 @@ struct BridgePagePayload: Codable, Sendable {
     let subheadline: String?
     let body: String?
     let footnote: String?
+    let elements: [BridgePageElementPayload]?
+}
+
+struct BridgePageElementPayload: Codable, Sendable {
+    let type: String
+    let id: String?
+    let text: String?
+    let label: String?
+    let value: Double?
+    let title: String?
+    let systemName: String?
+    let placeholder: String?
+    let postURL: String?
+    let body: [String: String]?
 }
 
 struct BridgePluginRuntimeSnapshot: Codable, Sendable {

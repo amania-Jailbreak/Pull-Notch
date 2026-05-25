@@ -3322,43 +3322,7 @@ final class NotchOverlayModel {
             title: payload.title,
             preferredWidth: CGFloat(payload.preferredWidth ?? 360)
         ) {
-            AnyView(
-                VStack(alignment: .leading, spacing: 14) {
-                    if let symbolName = payload.symbolName {
-                        Image(systemName: symbolName)
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.92))
-                    }
-
-                    if let headline = payload.headline, !headline.isEmpty {
-                        Text(headline)
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-
-                    if let subheadline = payload.subheadline, !subheadline.isEmpty {
-                        Text(subheadline)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.72))
-                    }
-
-                    if let body = payload.body, !body.isEmpty {
-                        Text(body)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.82))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    if let footnote = payload.footnote, !footnote.isEmpty {
-                        Text(footnote)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(24)
-            )
+            AnyView(BridgePageView(payload: payload))
         }
 
         registerPluginExpandedPage(descriptor, pluginID: bridgePluginID(for: clientID))
