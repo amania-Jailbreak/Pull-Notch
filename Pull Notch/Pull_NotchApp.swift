@@ -369,7 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.ignoresMouseEvents = false
         window.hidesOnDeactivate = false
-        window.contentView = NSHostingView(rootView: ContentView(overlayModel: overlayModel))
+        window.contentView = NotchHostingView(overlayModel: overlayModel)
 
         overlayWindow = window
         updateOverlayPosition()
@@ -435,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             let location = event.locationInWindow
-            if !overlayWindow.frame.contains(location) {
+            if !self.overlayInteractiveFrameInScreen().contains(location) {
                 DispatchQueue.main.async {
                     self.overlayModel.dismissExpandedPanel()
                 }
@@ -453,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             let location = NSEvent.mouseLocation
-            guard overlayWindow.frame.contains(location) else { return event }
+            guard self.overlayInteractiveFrameInScreen().contains(location) else { return event }
 
             let horizontalDelta = abs(event.scrollingDeltaX)
             let verticalDelta = abs(event.scrollingDeltaY)
@@ -507,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
                 let self,
                 let overlayWindow,
-                overlayWindow.frame.contains(NSEvent.mouseLocation),
+                self.overlayInteractiveFrameInScreen().contains(NSEvent.mouseLocation),
                 self.overlayModel.handleToastSpaceKey()
             else {
                 return event
@@ -516,11 +516,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
     }
+
+    private func overlayInteractiveFrameInScreen() -> NSRect {
+        guard let overlayWindow else { return .zero }
+        let windowFrame = overlayWindow.frame
+        let width = overlayModel.visibleWidth
+        let height = overlayModel.currentIslandHeight
+        let x = windowFrame.midX - (width / 2)
+        let y = windowFrame.maxY - overlayModel.effectiveWindowTopInset - height
+        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -6, dy: -4)
+    }
 }
 
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+final class NotchHostingView: NSHostingView<ContentView> {
+    private let overlayModel: NotchOverlayModel
+
+    init(overlayModel: NotchOverlayModel) {
+        self.overlayModel = overlayModel
+        super.init(rootView: ContentView(overlayModel: overlayModel))
+    }
+
+    @MainActor @preconcurrency required init(rootView: ContentView) {
+        self.overlayModel = rootView.overlayModel
+        super.init(rootView: rootView)
+    }
+
+    @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard interactiveFrameInBounds().contains(point) else { return nil }
+        return super.hitTest(point)
+    }
+
+    private func interactiveFrameInBounds() -> NSRect {
+        let width = overlayModel.visibleWidth
+        let height = overlayModel.currentIslandHeight
+        let x = bounds.midX - (width / 2)
+        let y = bounds.maxY - overlayModel.effectiveWindowTopInset - height
+        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -6, dy: -4)
+    }
 }
 
 final class SettingsPanel: NSPanel {

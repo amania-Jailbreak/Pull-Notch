@@ -27,22 +27,12 @@ struct ContentView: View {
         )
         .padding(.top, overlayModel.effectiveWindowTopInset)
         .background(Color.clear)
-        .contentShape(Rectangle())
         .dropDestination(for: URL.self) { urls, _ in
             guard let fileURL = urls.first(where: { $0.isFileURL }) else { return false }
             overlayModel.pinFile(fileURL)
             return true
         } isTargeted: { isTargeted in
             isDropTargeted = isTargeted
-        }
-        .onHover { hovering in
-            guard hovering != isHovering else { return }
-            isHovering = hovering
-            overlayModel.setHoverTitleVisible(hovering)
-
-            if hovering {
-                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-            }
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 18)
@@ -80,6 +70,7 @@ struct ContentView: View {
                     expandedContent
                 }
                 .clipShape(DynamicIslandShape(cornerRadius: 22))
+                .onHover(perform: handleIslandHover)
                 .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
                 .animation(islandGeometryAnimation, value: overlayModel.currentIslandHeight)
                 .animation(islandContentAnimation, value: transientPresentationKey)
@@ -97,6 +88,7 @@ struct ContentView: View {
                     }
                 }
                 .contentShape(DynamicIslandShape(cornerRadius: 22))
+                .onHover(perform: handleIslandHover)
                 .onTapGesture {
                     if overlayModel.expandedPanel != .onboarding {
                         overlayModel.toggleMusicPlayer()
@@ -157,6 +149,7 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
             }
             .contentShape(DynamicIslandShape(cornerRadius: 12))
+            .onHover(perform: handleIslandHover)
             .onTapGesture {
                 if overlayModel.expandedPanel != .onboarding {
                     overlayModel.toggleMusicPlayer()
@@ -182,6 +175,16 @@ struct ContentView: View {
             .frame(width: overlayModel.panelSize.width, alignment: .center)
             .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
             .animation(islandContentAnimation, value: transientPresentationKey)
+    }
+
+    private func handleIslandHover(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
+        isHovering = hovering
+        overlayModel.setHoverTitleVisible(hovering)
+
+        if hovering {
+            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        }
     }
 
     @ViewBuilder
