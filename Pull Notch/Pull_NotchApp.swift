@@ -243,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var outsideClickMonitor: Any?
     private var scrollWheelMonitor: Any?
     private var spaceKeyMonitor: Any?
+    private var mousePassthroughMonitor: Any?
     private var sharingPicker: NSSharingServicePicker?
     private var lastScrollPageSwitchAt: TimeInterval = 0
     private var lastOverlayFrame: NSRect?
@@ -280,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeOutsideClicks()
         observeScrollWheelPaging()
         observeSpaceKeyForToastDismissal()
+        observeMousePassthrough()
         nowPlayingMonitor.start(using: overlayModel)
         screenAudioMonitor.start(using: overlayModel)
         volumeMonitor.start(using: overlayModel)
@@ -337,6 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !framesApproximatelyEqual(lastOverlayFrame ?? overlayWindow.frame, targetFrame) else { return }
         lastOverlayFrame = targetFrame
         overlayWindow.setFrame(targetFrame, display: true, animate: false)
+        updateOverlayMousePassthrough()
     }
 
     private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
@@ -434,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            let location = event.locationInWindow
+            let location = NSEvent.mouseLocation
             if !self.overlayInteractiveFrameInScreen().contains(location) {
                 DispatchQueue.main.async {
                     self.overlayModel.dismissExpandedPanel()
@@ -517,6 +520,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func observeMousePassthrough() {
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        mousePassthroughMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.updateOverlayMousePassthrough()
+            }
+        }
+    }
+
+    private func updateOverlayMousePassthrough() {
+        guard let overlayWindow else { return }
+        let shouldAcceptMouseEvents = overlayInteractiveFrameInScreen().contains(NSEvent.mouseLocation)
+        if overlayWindow.ignoresMouseEvents == shouldAcceptMouseEvents {
+            overlayWindow.ignoresMouseEvents = !shouldAcceptMouseEvents
+        }
+    }
+
     private func overlayInteractiveFrameInScreen() -> NSRect {
         guard let overlayWindow else { return .zero }
         let windowFrame = overlayWindow.frame
@@ -524,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let height = overlayModel.currentIslandHeight
         let x = windowFrame.midX - (width / 2)
         let y = windowFrame.maxY - overlayModel.effectiveWindowTopInset - height
-        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -6, dy: -4)
+        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -2, dy: -2)
     }
 }
 
@@ -560,7 +580,7 @@ final class NotchHostingView: NSHostingView<ContentView> {
         let height = overlayModel.currentIslandHeight
         let x = bounds.midX - (width / 2)
         let y = bounds.maxY - overlayModel.effectiveWindowTopInset - height
-        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -6, dy: -4)
+        return NSRect(x: x, y: y, width: width, height: height).insetBy(dx: -2, dy: -2)
     }
 }
 
@@ -1628,7 +1648,7 @@ final class NotchOverlayModel {
 
     var panelSize: CGSize {
         CGSize(
-            width: panelContentWidth + (windowHorizontalInset * 2),
+            width: visibleWidth + (windowHorizontalInset * 2),
             height: currentIslandHeight + effectiveWindowTopInset + effectiveWindowBottomInset
         )
     }
