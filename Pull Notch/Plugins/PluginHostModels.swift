@@ -2,45 +2,6 @@ import Foundation
 import SwiftUI
 import PullNotchPluginKit
 
-enum CompactWidgetIdentity: Hashable {
-    case builtIn(CompactWidgetKind)
-    case plugin(String)
-
-    var storageToken: String {
-        switch self {
-        case .builtIn(let kind):
-            return "builtin:\(kind.rawValue)"
-        case .plugin(let id):
-            return "plugin:\(id)"
-        }
-    }
-
-    init?(storageToken: String) {
-        if storageToken.hasPrefix("builtin:"),
-           let kind = CompactWidgetKind(rawValue: String(storageToken.dropFirst("builtin:".count))) {
-            self = .builtIn(kind)
-        } else if storageToken.hasPrefix("plugin:") {
-            self = .plugin(String(storageToken.dropFirst("plugin:".count)))
-        } else {
-            return nil
-        }
-    }
-}
-
-struct CompactWidgetPriorityItem: Identifiable {
-    let id: String
-    let identity: CompactWidgetIdentity
-    let title: String
-    let placement: CompactWidgetPlacement
-}
-
-struct CompactWidgetLayoutItem: Identifiable {
-    let id: String
-    let identity: CompactWidgetIdentity
-    let title: String
-    let zone: CompactWidgetZone
-}
-
 enum ExpandedPageSource {
     case builtIn(ExpandedWidgetPageKind)
     case plugin(String)
@@ -51,23 +12,7 @@ struct ExpandedPageDescriptor: Identifiable {
     let title: String
     let source: ExpandedPageSource
     let preferredWidth: CGFloat?
-    let render: (@MainActor () -> AnyView)?
-}
-
-enum PluginRuntimeState: String, Sendable {
-    case loaded
-    case disabled
-    case failed
-}
-
-struct PluginRuntimeInfo: Identifiable, Sendable {
-    let id: String
-    let displayName: String
-    let version: String
-    let capabilities: Set<PluginCapability>
-    let state: PluginRuntimeState
-    let errorMessage: String?
-    let bundlePath: String
+    let render: (@MainActor @Sendable () -> AnyView)?
 }
 
 struct BridgeWidgetPayload: Codable, Sendable {
@@ -135,6 +80,32 @@ struct BridgePagePayload: Codable, Sendable {
     let footnote: String?
     let elements: [BridgePageElementPayload]?
     let notification: Bool?
+}
+
+struct BridgeDashboardWidgetPayload: Codable, Sendable {
+    let id: String
+    let title: String
+    let symbolName: String?
+    let headline: String?
+    let subheadline: String?
+    let body: String?
+    let footnote: String?
+    let elements: [BridgePageElementPayload]?
+
+    var pagePayload: BridgePagePayload {
+        BridgePagePayload(
+            id: id,
+            title: title,
+            preferredWidth: nil,
+            symbolName: symbolName,
+            headline: headline,
+            subheadline: subheadline,
+            body: body,
+            footnote: footnote,
+            elements: elements,
+            notification: nil
+        )
+    }
 }
 
 struct BridgePageElementPayload: Codable, Sendable {

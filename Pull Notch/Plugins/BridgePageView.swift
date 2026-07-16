@@ -4,6 +4,7 @@ import SwiftUI
 struct BridgePageView: View {
     let payload: BridgePagePayload
     var onDismiss: (() -> Void)?
+    var contentPadding: CGFloat = 24
 
     @State private var textValues: [String: String] = [:]
     @State private var postingElementID: String?
@@ -27,7 +28,7 @@ struct BridgePageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(24)
+        .padding(contentPadding)
     }
 
     @ViewBuilder

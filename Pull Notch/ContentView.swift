@@ -7,6 +7,8 @@
 
 import AppKit
 import Observation
+import PullNotchPluginKit
+import QuickLookThumbnailing
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -15,6 +17,8 @@ struct ContentView: View {
     @State private var isHovering = false
     @State private var isDropTargeted = false
     @State private var visualizerHeights: [CGFloat] = [8, 13, 10, 16, 12, 7]
+    @State private var pinnedScrollID: UUID?
+    @State private var acceptsPinnedScrollSelection = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -28,16 +32,20 @@ struct ContentView: View {
         .padding(.top, overlayModel.effectiveWindowTopInset)
         .background(Color.clear)
         .dropDestination(for: URL.self) { urls, _ in
-            guard let fileURL = urls.first(where: { $0.isFileURL }) else { return false }
-            overlayModel.pinFile(fileURL)
-            return true
+            let fileURLs = urls.filter(\.isFileURL)
+            guard !fileURLs.isEmpty else { return false }
+            return overlayModel.pinFiles(fileURLs).acceptedCount > 0
         } isTargeted: { isTargeted in
             isDropTargeted = isTargeted
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 18)
                 .onEnded { value in
-                    guard overlayModel.expandedPanel == .musicPlayer else { return }
+                    guard overlayModel.expandedPanel == .musicPlayer,
+                          overlayModel.activeExpandedBuiltInPage != .pinnedFile
+                    else {
+                        return
+                    }
                     let horizontal = value.translation.width
                     let vertical = value.translation.height
                     guard abs(horizontal) > abs(vertical), abs(horizontal) > 26 else { return }
@@ -62,22 +70,32 @@ struct ContentView: View {
 
     private var standardIslandShape: some View {
         ZStack(alignment: .top) {
-            DynamicIslandShape(cornerRadius: 22)
-                .fill(islandFill)
+            SiriGlassIslandSurface(
+                cornerRadius: islandCornerRadius,
+                showsBorder: true,
+                castsShadow: true
+            )
                 .frame(width: overlayModel.visibleWidth, height: overlayModel.currentIslandHeight)
-                .opacity((overlayModel.showsTrackChange || overlayModel.showsToastLyrics || overlayModel.expandedPanel == .musicPlayer || overlayModel.showsHoverChange || overlayModel.showsVolumeChange) ? 1 : 0)
+                .opacity(showsExtendedIslandSurface ? 1 : 0)
                 .overlay(alignment: .bottom) {
                     expandedContent
                 }
-                .clipShape(DynamicIslandShape(cornerRadius: 22))
+                .clipShape(DynamicIslandShape(cornerRadius: islandCornerRadius))
                 .onHover(perform: handleIslandHover)
                 .animation(islandGeometryAnimation, value: overlayModel.visibleWidth)
                 .animation(islandGeometryAnimation, value: overlayModel.currentIslandHeight)
                 .animation(islandContentAnimation, value: transientPresentationKey)
 
-            DynamicIslandShape(cornerRadius: 22)
-                .fill(islandFill)
+            SiriGlassIslandSurface(
+                cornerRadius: 22,
+                showsBorder: true,
+                castsShadow: true
+            )
                 .frame(width: overlayModel.visibleWidth, height: overlayModel.compactBarHeight)
+                // Transient banners and expanded pages use the full-height
+                // surface above. Hiding only this background keeps compact
+                // widgets available without stacking a second glass cap.
+                .opacity(showsExtendedIslandSurface ? 0 : 1)
                 .overlay(alignment: .top) {
                     ZStack {
                         if overlayModel.expandedPanel != .musicPlayer {
@@ -113,6 +131,7 @@ struct ContentView: View {
                 }
                 .allowsHitTesting(overlayModel.expandedPanel != .musicPlayer)
                 .animation(islandGeometryAnimation, value: overlayModel.expandedPanel == .musicPlayer)
+                .animation(islandContentAnimation, value: showsExtendedIslandSurface)
         }
         .frame(width: overlayModel.panelSize.width, alignment: .center)
         .overlay {
@@ -131,8 +150,7 @@ struct ContentView: View {
     }
 
     private var externalCompactIsland: some View {
-        DynamicIslandShape(cornerRadius: 12)
-            .fill(islandFill)
+        SiriGlassIslandSurface(cornerRadius: 13, showsBorder: true, castsShadow: true)
             .frame(width: overlayModel.visibleWidth, height: overlayModel.externalCompactHeight)
             .overlay {
                 HStack(spacing: 10) {
@@ -220,8 +238,12 @@ struct ContentView: View {
         return isHovering ? 1.018 : 1
     }
 
-    private var islandFill: Color {
-        .black
+    private var showsExtendedIslandSurface: Bool {
+        overlayModel.currentIslandHeight > overlayModel.compactBarHeight
+    }
+
+    private var islandCornerRadius: CGFloat {
+        overlayModel.expandedPanel == .musicPlayer ? 30 : 22
     }
 
     private var musicPlayerExpansionAnimation: Animation {
@@ -667,6 +689,20 @@ struct ContentView: View {
             emptyExpandedPanel
         } else if overlayModel.activeExpandedBuiltInPage == .nowPlaying {
             nowPlayingPlayerPanel
+        } else if overlayModel.activeExpandedBuiltInPage == .pinnedFile {
+            VStack(alignment: .leading, spacing: 6) {
+                expandedPageHeader
+                pinnedFileExpandedPage
+            }
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else if overlayModel.activeExpandedBuiltInPage == .widgetBoard {
+            VStack(alignment: .leading, spacing: 8) {
+                expandedPageHeader
+                dashboardWidgetBoard
+            }
+            .padding(.top, 52)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else if let activeExpandedWidgetPage = overlayModel.activeExpandedWidgetPage,
                   case .plugin = activeExpandedWidgetPage.source,
                   let render = activeExpandedWidgetPage.render {
@@ -960,6 +996,8 @@ struct ContentView: View {
             switch descriptor.source {
             case .builtIn(.nowPlaying):
                 nowPlayingExpandedPage
+            case .builtIn(.widgetBoard):
+                dashboardWidgetBoard
             case .builtIn(.pinnedFile):
                 pinnedFileExpandedPage
             case .builtIn(.weather):
@@ -1002,56 +1040,899 @@ struct ContentView: View {
 
     private var nowPlayingExpandedPage: some View { nowPlayingPlayerPanel }
 
-    private var pinnedFileExpandedPage: some View {
-        HStack(alignment: .center, spacing: 14) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.82))
-                }
+    private var dashboardWidgetBoard: some View {
+        HStack(spacing: 10) {
+            dashboardPane(slot: .leading)
+            dashboardPane(slot: .trailing)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(overlayModel.pinnedFileURL?.lastPathComponent ?? "No File")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+    private func dashboardPane(slot: DashboardWidgetSlot) -> some View {
+        let identity = overlayModel.dashboardWidgetIdentity(for: slot)
+        let showsSystemWarning = identity == .builtIn(.systemStatus)
+            && overlayModel.systemStatusSnapshot.hasWarning
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: overlayModel.dashboardWidgetSymbol(identity))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+
+                Text(overlayModel.dashboardWidgetTitle(identity))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
 
-                Text(overlayModel.pinnedFileURL?.deletingLastPathComponent().path ?? "ファイルがありません")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.gray)
-                    .lineLimit(2)
+                Spacer(minLength: 0)
 
-                HStack(spacing: 8) {
-                    panelActionButton("Open", systemName: "arrow.up.forward.app") {
-                        guard let pinnedFileURL = overlayModel.pinnedFileURL else { return }
-                        NSWorkspace.shared.open(pinnedFileURL)
-                    }
-
-                    panelActionButton("Share", systemName: "square.and.arrow.up") {
-                        overlayModel.sharePinnedFile()
-                    }
-
-                    panelActionButton("Reveal", systemName: "folder.fill") {
-                        guard let pinnedFileURL = overlayModel.pinnedFileURL else { return }
-                        NSWorkspace.shared.activateFileViewerSelecting([pinnedFileURL])
-                    }
-
-                    panelActionButton("Unpin", systemName: "pin.slash.fill") {
-                        overlayModel.clearPinnedFile()
-                    }
-                }
-                .padding(.top, 4)
+                dashboardWidgetPicker(slot: slot, selected: identity)
             }
 
-            Spacer(minLength: 0)
+            dashboardWidgetContent(identity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(showsSystemWarning ? Color.orange.opacity(0.10) : Color.white.opacity(0.055))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(
+                            showsSystemWarning ? Color.orange.opacity(0.42) : Color.white.opacity(0.08),
+                            lineWidth: 0.8
+                        )
+                )
+        )
+    }
+
+    private func dashboardWidgetPicker(slot: DashboardWidgetSlot, selected: DashboardWidgetIdentity) -> some View {
+        Menu {
+            ForEach(overlayModel.availableDashboardWidgets, id: \.storageToken) { identity in
+                Button {
+                    overlayModel.selectDashboardWidget(identity, for: slot)
+                } label: {
+                    Label(
+                        overlayModel.dashboardWidgetTitle(identity),
+                        systemImage: selected == identity ? "checkmark" : overlayModel.dashboardWidgetSymbol(identity)
+                    )
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.46))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private func dashboardWidgetContent(_ identity: DashboardWidgetIdentity) -> some View {
+        switch identity {
+        case .builtIn(let kind):
+            switch kind {
+            case .todayAgenda:
+                dashboardAgendaWidget
+            case .monthCalendar:
+                dashboardMonthCalendarWidget
+            case .nowPlayingArtwork:
+                if overlayModel.isFeatureEnabled(.nowPlaying) {
+                    dashboardArtworkWidget
+                } else {
+                    dashboardDisabledFeatureState("Now Playing")
+                }
+            case .weather:
+                if overlayModel.isFeatureEnabled(.weather) {
+                    dashboardWeatherWidget
+                } else {
+                    dashboardDisabledFeatureState("Weather")
+                }
+            case .pomodoro:
+                if overlayModel.isFeatureEnabled(.pomodoro) {
+                    dashboardPomodoroWidget
+                } else {
+                    dashboardDisabledFeatureState("Pomodoro")
+                }
+            case .pinnedFile:
+                if overlayModel.isFeatureEnabled(.pinnedFile) {
+                    dashboardPinnedFileWidget
+                } else {
+                    dashboardDisabledFeatureState("Pinned File")
+                }
+            case .battery:
+                if overlayModel.isFeatureEnabled(.battery) {
+                    dashboardBatteryWidget
+                } else {
+                    dashboardDisabledFeatureState("Battery")
+                }
+            case .todayTasks:
+                if overlayModel.isFeatureEnabled(.reminders) {
+                    dashboardTodayTasksWidget
+                } else {
+                    dashboardDisabledFeatureState("Reminders")
+                }
+            case .systemStatus:
+                if overlayModel.isFeatureEnabled(.systemStatus) {
+                    dashboardSystemStatusWidget
+                } else {
+                    dashboardDisabledFeatureState("System Status")
+                }
+            }
+        case .plugin(let id):
+            if let descriptor = overlayModel.pluginDashboardWidgets.first(where: { $0.id == id }) {
+                descriptor.render()
+            } else {
+                dashboardUnavailableState(
+                    systemName: "puzzlepiece.extension",
+                    title: "Plugin unavailable",
+                    message: "The selected plugin is disabled or not loaded."
+                )
+            }
         }
     }
 
+    @ViewBuilder
+    private var dashboardAgendaWidget: some View {
+        let calendarModel = overlayModel.calendarWidgetModel
+        Group {
+            switch calendarModel.accessState {
+            case .authorized:
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(Date.now.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    if calendarModel.todayEvents.isEmpty {
+                        Spacer(minLength: 10)
+                        dashboardUnavailableState(
+                            systemName: "calendar.badge.checkmark",
+                            title: "No events today",
+                            message: "Your schedule is clear."
+                        )
+                    } else {
+                        ForEach(calendarModel.todayEvents) { event in
+                            dashboardEventRow(event)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            case .requesting:
+                dashboardProgressState("Requesting calendar access…")
+            case .notDetermined:
+                dashboardProgressState("Preparing Calendar…")
+            case .denied, .restricted:
+                dashboardCalendarPermissionState
+            }
+        }
+        .task { await calendarModel.prepareIfNeeded() }
+    }
+
+    @ViewBuilder
+    private var dashboardMonthCalendarWidget: some View {
+        let calendarModel = overlayModel.calendarWidgetModel
+        Group {
+            switch calendarModel.accessState {
+            case .authorized:
+                VStack(spacing: 3) {
+                    HStack {
+                        dashboardMonthButton("chevron.left") { calendarModel.moveMonth(by: -1) }
+                        Spacer()
+                        Text(calendarModel.monthTitle)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        dashboardMonthButton("chevron.right") { calendarModel.moveMonth(by: 1) }
+                    }
+
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
+                        ForEach(Array(calendarModel.weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                            Text(symbol)
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.35))
+                                .frame(height: 11)
+                        }
+
+                        ForEach(Array(calendarModel.monthGridDates.enumerated()), id: \.offset) { _, date in
+                            if let date {
+                                dashboardCalendarDay(date, model: calendarModel)
+                            } else {
+                                Color.clear.frame(height: 17)
+                            }
+                        }
+                    }
+
+                    if let event = calendarModel.selectedDateEvents.first {
+                        dashboardEventRow(event, compact: true)
+                    } else {
+                        Text("No events on selected day")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 2)
+                    }
+                }
+            case .requesting:
+                dashboardProgressState("Requesting calendar access…")
+            case .notDetermined:
+                dashboardProgressState("Preparing Calendar…")
+            case .denied, .restricted:
+                dashboardCalendarPermissionState
+            }
+        }
+        .task { await calendarModel.prepareIfNeeded() }
+    }
+
+    private func dashboardCalendarDay(_ date: Date, model: CalendarWidgetModel) -> some View {
+        Button {
+            model.select(date: date)
+        } label: {
+            VStack(spacing: 0) {
+                Text(date.formatted(.dateTime.day()))
+                    .font(.system(size: 9, weight: model.isToday(date) ? .bold : .medium))
+                Circle()
+                    .fill(model.hasEvents(on: date) ? Color.white.opacity(0.8) : Color.clear)
+                    .frame(width: 2.5, height: 2.5)
+            }
+            .foregroundStyle(model.isSelected(date) ? Color.black : Color.white.opacity(model.isToday(date) ? 1 : 0.72))
+            .frame(maxWidth: .infinity, minHeight: 17)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(model.isSelected(date) ? Color.white : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var dashboardArtworkWidget: some View {
+        Group {
+            if let image = artworkImage(for: overlayModel.artworkData) {
+                HStack(spacing: 12) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 112, height: 112)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(overlayModel.nowPlayingTitle ?? "Now Playing")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        Text(overlayModel.nowPlayingArtist ?? "Unknown Artist")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                dashboardUnavailableState(systemName: "music.note", title: "Not Playing", message: "Cover art appears when media starts.")
+            }
+        }
+    }
+
+    private var dashboardWeatherWidget: some View {
+        Group {
+            if let temperature = overlayModel.weatherTemperatureText {
+                VStack(spacing: 11) {
+                    HStack(spacing: 11) {
+                        Image(systemName: overlayModel.weatherSymbolName ?? "cloud.fill")
+                            .font(.system(size: 30, weight: .medium))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.white.opacity(0.86))
+                            .frame(width: 45)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(temperature)
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(.white)
+                            Text(overlayModel.manualWeatherLocation ?? "Current Location")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        dashboardSmallButton("Refresh", systemName: "arrow.clockwise") { overlayModel.refreshWeather() }
+                    }
+
+                    weatherForecastStrip
+                }
+                .padding(.vertical, 5)
+                .frame(maxHeight: .infinity)
+            } else {
+                dashboardUnavailableState(systemName: "cloud.slash", title: "Weather unavailable", message: "Enable Weather or set a location.")
+            }
+        }
+    }
+
+    private var dashboardPomodoroWidget: some View {
+        VStack(spacing: 7) {
+            Spacer(minLength: 0)
+            Image(systemName: overlayModel.pomodoroPhase.symbolName)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+            Text(overlayModel.pomodoroTimeText)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            Text(overlayModel.pomodoroPhase.title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+            HStack(spacing: 6) {
+                dashboardSmallButton(overlayModel.pomodoroIsRunning ? "Pause" : "Start", systemName: overlayModel.pomodoroIsRunning ? "pause.fill" : "play.fill") {
+                    overlayModel.togglePomodoroRunning()
+                }
+                dashboardSmallButton("Skip", systemName: "forward.end.fill") { overlayModel.skipPomodoroPhase() }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var dashboardPinnedFileWidget: some View {
+        Group {
+            if let file = overlayModel.selectedPinnedFile {
+                VStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    PinnedFileThumbnailView(item: file, size: 72)
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    Text(file.displayName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(file.isAvailable ? .white : .orange)
+                        .lineLimit(1)
+                    Text("\(overlayModel.pinnedFiles.count) pinned")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                dashboardUnavailableState(systemName: "pin.slash", title: "No pinned files", message: "Drop files onto Pull Notch to add them.")
+            }
+        }
+    }
+
+    private var dashboardBatteryWidget: some View {
+        Group {
+            if overlayModel.batteryLevel != nil || !overlayModel.accessoryBatteryDevices.isEmpty {
+                VStack(spacing: 7) {
+                    if let level = overlayModel.batteryLevel {
+                        batteryDeviceRow(
+                            name: "This Mac",
+                            level: level,
+                            detail: overlayModel.batteryIsCharging ? (overlayModel.chargingPowerText ?? "Charging") : "Internal battery",
+                            symbolName: overlayModel.batterySymbolName,
+                            isConnected: true
+                        )
+                    }
+                    ForEach(overlayModel.accessoryBatteryDevices.prefix(3)) { device in
+                        batteryDeviceRow(
+                            name: device.name,
+                            level: device.level,
+                            detail: device.detailText,
+                            symbolName: device.symbolName,
+                            isConnected: device.isConnected
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                dashboardUnavailableState(systemName: "battery.0percent", title: "Battery unavailable", message: "No battery-powered devices were detected.")
+            }
+        }
+    }
+
+    private func batteryDeviceRow(
+        name: String,
+        level: Int,
+        detail: String,
+        symbolName: String,
+        isConnected: Bool
+    ) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: symbolName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(level <= 15 ? .orange : .white.opacity(0.78))
+                .frame(width: 25)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(isConnected ? 0.9 : 0.55))
+                        .lineLimit(1)
+                    if !isConnected {
+                        Text("CACHED")
+                            .font(.system(size: 6.5, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                }
+                Text(detail)
+                    .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Text("\(level)%")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(level <= 15 ? .orange : .white.opacity(0.88))
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var weatherForecastStrip: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(overlayModel.weatherForecast.prefix(7).enumerated()), id: \.element.id) { index, day in
+                VStack(spacing: 4) {
+                    Text(index == 0 ? "Today" : day.date.formatted(.dateTime.weekday(.narrow)))
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(index == 0 ? 0.8 : 0.42))
+                    Image(systemName: day.symbolName)
+                        .font(.system(size: 12, weight: .medium))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.white.opacity(0.72))
+                    Text("\(day.highTemperature)°")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.86))
+                    Text("\(day.lowTemperature)°")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.36))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var dashboardTodayTasksWidget: some View {
+        let model = overlayModel.reminderWidgetModel
+        Group {
+            switch model.accessState {
+            case .authorized:
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        if model.overdueCount > 0 {
+                            Text("\(model.overdueCount) overdue")
+                                .foregroundStyle(.orange.opacity(0.9))
+                        }
+                        Text("\(model.remainingCount) remaining")
+                            .foregroundStyle(.white.opacity(0.42))
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 9, weight: .semibold))
+
+                    if model.isLoading && model.items.isEmpty {
+                        dashboardProgressState("Loading Reminders…")
+                    } else if model.items.isEmpty {
+                        dashboardUnavailableState(
+                            systemName: "checkmark.circle.fill",
+                            title: "All caught up",
+                            message: "No overdue or due-today reminders."
+                        )
+                    } else {
+                        ForEach(model.items.prefix(4)) { item in
+                            dashboardReminderRow(item)
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    if let errorMessage = model.errorMessage {
+                        Text(errorMessage)
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(.orange.opacity(0.85))
+                            .lineLimit(2)
+                    }
+                }
+            case .requesting:
+                dashboardProgressState("Requesting Reminders access…")
+            case .notDetermined:
+                dashboardProgressState("Preparing Reminders…")
+            case .denied, .restricted:
+                VStack(spacing: 8) {
+                    dashboardUnavailableState(
+                        systemName: "checklist.unchecked",
+                        title: "Reminders access needed",
+                        message: "Allow access in System Settings."
+                    )
+                    dashboardSmallButton("Open Settings", systemName: "gear") {
+                        overlayModel.openReminderPrivacySettings()
+                    }
+                }
+            }
+        }
+        .task { await model.prepareIfNeeded() }
+    }
+
+    private func dashboardReminderRow(_ item: ReminderWidgetItem) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                overlayModel.completeReminder(id: item.id)
+            } label: {
+                Image(systemName: "circle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(item.isOverdue ? Color.orange.opacity(0.9) : Color.white.opacity(0.55))
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Text(item.isOverdue ? "Overdue · \(item.listTitle)" : reminderDueTimeText(item.dueDate, listTitle: item.listTitle))
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(item.isOverdue ? Color.orange.opacity(0.72) : Color.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var dashboardSystemStatusWidget: some View {
+        let snapshot = overlayModel.systemStatusSnapshot
+        return VStack(alignment: .leading, spacing: 10) {
+            dashboardSystemMetricRow(
+                title: "CPU",
+                value: snapshot.cpuUsage,
+                valueText: snapshot.cpuUsage.map(percentText) ?? "Unavailable",
+                isWarning: (snapshot.cpuUsage ?? 0) >= 0.85
+            )
+            dashboardSystemMetricRow(
+                title: "Memory",
+                value: snapshot.memoryUsage,
+                valueText: memoryStatusText(snapshot),
+                isWarning: (snapshot.memoryUsage ?? 0) >= 0.85
+            )
+            dashboardSystemMetricRow(
+                title: "Storage",
+                value: snapshot.storageUsage,
+                valueText: storageStatusText(snapshot),
+                isWarning: (snapshot.storageUsage ?? 0) >= 0.90
+            )
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 8)
+    }
+
+    private func dashboardSystemMetricRow(
+        title: String,
+        value: Double?,
+        valueText: String,
+        isWarning: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+                Spacer()
+                Text(valueText)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isWarning ? Color.orange.opacity(0.95) : Color.white.opacity(0.72))
+                    .lineLimit(1)
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    if let value {
+                        Capsule()
+                            .fill(isWarning ? Color.orange.opacity(0.85) : Color.white.opacity(0.72))
+                            .frame(width: proxy.size.width * CGFloat(min(1, max(0, value))))
+                    }
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    private func reminderDueTimeText(_ date: Date, listTitle: String) -> String {
+        let components = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute], from: date)
+        if components.hour == 0 && components.minute == 0 {
+            return "Today · \(listTitle)"
+        }
+        return "\(date.formatted(date: .omitted, time: .shortened)) · \(listTitle)"
+    }
+
+    private func percentText(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func memoryStatusText(_ snapshot: SystemStatusSnapshot) -> String {
+        guard let used = snapshot.usedMemoryBytes, let total = snapshot.totalMemoryBytes else { return "Unavailable" }
+        return "\(byteCount(used)) / \(byteCount(total))"
+    }
+
+    private func storageStatusText(_ snapshot: SystemStatusSnapshot) -> String {
+        guard let available = snapshot.availableStorageBytes else { return "Unavailable" }
+        return "\(byteCount(UInt64(max(0, available)))) free"
+    }
+
+    private func byteCount(_ value: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .memory)
+    }
+
+    private var dashboardCalendarPermissionState: some View {
+        VStack(spacing: 8) {
+            dashboardUnavailableState(systemName: "calendar.badge.exclamationmark", title: "Calendar access needed", message: "Allow read access in System Settings.")
+            dashboardSmallButton("Open Settings", systemName: "gear") {
+                overlayModel.calendarWidgetModel.openSystemSettings()
+            }
+        }
+    }
+
+    private func dashboardEventRow(_ event: CalendarEventItem, compact: Bool = false) -> some View {
+        HStack(spacing: 7) {
+            Capsule().fill(Color.white.opacity(0.55)).frame(width: 2.5)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.title)
+                    .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+                Text(event.isAllDay ? "All-day" : event.startDate.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, compact ? 1 : 3)
+    }
+
+    private func dashboardUnavailableState(systemName: String, title: String, message: String) -> some View {
+        VStack(spacing: 6) {
+            Spacer(minLength: 0)
+            Image(systemName: systemName)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(.white.opacity(0.42))
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+            Text(message)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.35))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func dashboardDisabledFeatureState(_ featureName: String) -> some View {
+        dashboardUnavailableState(
+            systemName: "switch.2",
+            title: "\(featureName) is disabled",
+            message: "Enable it from Pull Notch Settings."
+        )
+    }
+
+    private func dashboardProgressState(_ text: String) -> some View {
+        VStack(spacing: 8) {
+            Spacer()
+            ProgressView().controlSize(.small)
+            Text(text).font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.4))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func dashboardMonthButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.6))
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Color.white.opacity(0.07)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dashboardSmallButton(_ title: String, systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var pinnedFileExpandedPage: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            pinnedFileCoverFlow
+
+            if let selected = overlayModel.selectedPinnedFile {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selected.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+
+                        Text(
+                            overlayModel.pinnedFileStatusMessage
+                                ?? (selected.isAvailable ? selected.parentPath : "File unavailable · \(selected.parentPath)")
+                        )
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(
+                                overlayModel.pinnedFileStatusMessage == nil && selected.isAvailable
+                                    ? Color.gray
+                                    : Color.orange.opacity(0.9)
+                            )
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text("\(overlayModel.pinnedFiles.count)/\(overlayModel.maximumPinnedFileCount)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+
+                HStack(spacing: 7) {
+                    panelActionButton("Preview", systemName: "eye.fill", isEnabled: selected.isAvailable) {
+                        overlayModel.quickLookPinnedFile()
+                    }
+
+                    panelActionButton("Open", systemName: "arrow.up.forward.app", isEnabled: selected.isAvailable) {
+                        guard let url = selected.url else { return }
+                        NSWorkspace.shared.open(url)
+                    }
+
+                    panelActionButton("Share", systemName: "square.and.arrow.up", isEnabled: selected.isAvailable) {
+                        overlayModel.sharePinnedFile()
+                    }
+
+                    panelActionButton("Reveal", systemName: "folder.fill", isEnabled: selected.isAvailable) {
+                        guard let url = selected.url else { return }
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+
+                    panelActionButton("Unpin", systemName: "pin.slash.fill") {
+                        overlayModel.removePinnedFile(id: selected.id)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    panelIconButton("plus") {
+                        overlayModel.choosePinnedFiles()
+                    }
+                }
+            }
+        }
+    }
+
+    private var pinnedFileCoverFlow: some View {
+        let selectedID = overlayModel.selectedPinnedFileID ?? overlayModel.pinnedFiles.first?.id
+        let selectedIndex = overlayModel.pinnedFiles.firstIndex(where: { $0.id == selectedID }) ?? 0
+
+        return ScrollView(.horizontal) {
+            LazyHStack(spacing: -8) {
+                ForEach(Array(overlayModel.pinnedFiles.enumerated()), id: \.element.id) { index, item in
+                    pinnedFileCoverFlowCard(
+                        item,
+                        position: index - selectedIndex,
+                        isSelected: item.id == selectedID
+                    )
+                    .id(item.id)
+                    .frame(width: 100)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        overlayModel.selectPinnedFile(id: item.id)
+                        overlayModel.quickLookPinnedFile()
+                    }
+                    .onTapGesture {
+                        overlayModel.selectPinnedFile(id: item.id)
+                        withAnimation(.smooth(duration: 0.22)) {
+                            pinnedScrollID = item.id
+                        }
+                    }
+                    .draggable(item.id.uuidString)
+                    .dropDestination(for: String.self) { values, _ in
+                        guard let value = values.first,
+                              let sourceID = UUID(uuidString: value)
+                        else {
+                            return false
+                        }
+                        overlayModel.movePinnedFile(id: sourceID, before: item.id)
+                        overlayModel.selectPinnedFile(id: sourceID)
+                        pinnedScrollID = sourceID
+                        return true
+                    }
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .contentMargins(.horizontal, max(0, (overlayModel.visibleWidth - 128) / 2), for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+        .scrollPosition(id: $pinnedScrollID, anchor: .center)
+        .frame(height: 112)
+        .task {
+            acceptsPinnedScrollSelection = false
+            pinnedScrollID = selectedID
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            pinnedScrollID = selectedID
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            acceptsPinnedScrollSelection = true
+        }
+        .onChange(of: pinnedScrollID) { _, newValue in
+            if acceptsPinnedScrollSelection, let newValue {
+                overlayModel.selectPinnedFile(id: newValue)
+            }
+        }
+        .onChange(of: overlayModel.selectedPinnedFileID) { _, newValue in
+            guard pinnedScrollID != newValue else { return }
+            withAnimation(.smooth(duration: 0.22)) {
+                pinnedScrollID = newValue
+            }
+        }
+    }
+
+    private func pinnedFileCoverFlowCard(
+        _ item: PinnedFileItem,
+        position: Int,
+        isSelected: Bool
+    ) -> some View {
+        let thumbnailSize: CGFloat = isSelected ? 92 : 72
+        let rotation = isSelected ? 0 : (position < 0 ? 52.0 : -52.0)
+
+        return VStack(spacing: 1) {
+            PinnedFileThumbnailView(item: item, size: thumbnailSize)
+                .frame(width: thumbnailSize, height: thumbnailSize)
+                .clipShape(RoundedRectangle(cornerRadius: isSelected ? 15 : 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: isSelected ? 15 : 12, style: .continuous)
+                        .stroke(Color.white.opacity(isSelected ? 0.28 : 0.10), lineWidth: 0.8)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if !item.isAvailable {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.orange)
+                            .padding(5)
+                            .background(Circle().fill(Color.black.opacity(0.72)))
+                            .padding(4)
+                    }
+                }
+                .shadow(color: .black.opacity(isSelected ? 0.45 : 0.25), radius: isSelected ? 12 : 7, y: 5)
+
+            PinnedFileThumbnailView(item: item, size: thumbnailSize)
+                .frame(width: thumbnailSize, height: 18)
+                .clipped()
+                .scaleEffect(x: 1, y: -1)
+                .opacity(isSelected ? 0.20 : 0.10)
+                .mask(
+                    LinearGradient(
+                        colors: [.white.opacity(0.7), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .rotation3DEffect(.degrees(rotation), axis: (x: 0, y: 1, z: 0), perspective: 0.72)
+        .scaleEffect(isSelected ? 1 : 0.82)
+        .opacity(isSelected ? 1 : 0.65)
+        .zIndex(isSelected ? 10 : Double(max(0, 5 - abs(position))))
+        .animation(.smooth(duration: 0.22), value: isSelected)
+    }
+
     private var weatherExpandedPage: some View {
-        HStack(alignment: .center, spacing: 14) {
+        VStack(spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.08))
                 .frame(width: 64, height: 64)
@@ -1085,6 +1966,9 @@ struct ContentView: View {
             }
 
             Spacer(minLength: 0)
+            }
+
+            weatherForecastStrip
         }
     }
 
@@ -1202,7 +2086,12 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    private func panelActionButton(_ title: String, systemName: String, action: @escaping () -> Void) -> some View {
+    private func panelActionButton(
+        _ title: String,
+        systemName: String,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: systemName)
@@ -1221,6 +2110,8 @@ struct ContentView: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.35)
     }
 }
 
@@ -1253,6 +2144,135 @@ private struct CenterExpansionModifier: ViewModifier {
             .blur(radius: blurRadius)
             .opacity(opacity)
             .offset(y: yOffset)
+    }
+}
+
+private struct SiriGlassIslandSurface: View {
+    let cornerRadius: CGFloat
+    let showsBorder: Bool
+    let castsShadow: Bool
+
+    var body: some View {
+        let shape = DynamicIslandShape(cornerRadius: cornerRadius)
+
+        Color.clear
+            .glassEffect(
+                .regular.tint(Color.black.opacity(0.38)),
+                in: shape
+            )
+            .overlay {
+                shape.fill(
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color.black.opacity(0.70), location: 0),
+                            .init(color: Color.black.opacity(0.54), location: 0.38),
+                            .init(color: Color.black.opacity(0.30), location: 0.72),
+                            .init(color: Color.white.opacity(0.035), location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .allowsHitTesting(false)
+            }
+            .overlay {
+                if showsBorder {
+                    shape.stroke(
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color.white.opacity(0.13), location: 0),
+                                .init(color: Color.white.opacity(0.025), location: 0.42),
+                                .init(color: Color.white.opacity(0.10), location: 1)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.65
+                    )
+                    .allowsHitTesting(false)
+                }
+            }
+            .shadow(
+                color: Color.black.opacity(castsShadow ? 0.24 : 0),
+                radius: castsShadow ? 12 : 0,
+                x: 0,
+                y: castsShadow ? 7 : 0
+            )
+            .shadow(
+                color: Color.white.opacity(castsShadow ? 0.025 : 0),
+                radius: castsShadow ? 1 : 0,
+                x: 0,
+                y: 1
+            )
+    }
+}
+
+private struct PinnedFileThumbnailView: View {
+    let item: PinnedFileItem
+    let size: CGFloat
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Image(nsImage: image ?? fallbackImage)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .background(Color.white.opacity(0.06))
+            .task(id: cacheKey) {
+                image = await PinnedFileThumbnailCache.shared.image(for: item, size: size)
+            }
+    }
+
+    private var fallbackImage: NSImage {
+        if let url = item.url {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        return NSImage(systemSymbolName: "doc.fill", accessibilityDescription: nil) ?? NSImage()
+    }
+
+    private var cacheKey: String {
+        "\(item.id.uuidString)-\(item.modificationDate?.timeIntervalSinceReferenceDate ?? 0)-\(Int(size))"
+    }
+}
+
+@MainActor
+private final class PinnedFileThumbnailCache {
+    static let shared = PinnedFileThumbnailCache()
+
+    private let cache = NSCache<NSString, NSImage>()
+
+    func image(for item: PinnedFileItem, size: CGFloat) async -> NSImage {
+        let key = "\(item.id.uuidString)-\(item.modificationDate?.timeIntervalSinceReferenceDate ?? 0)-\(Int(size))" as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
+        let fallback: NSImage
+        if let url = item.url {
+            fallback = NSWorkspace.shared.icon(forFile: url.path)
+        } else {
+            fallback = NSImage(systemSymbolName: "doc.fill", accessibilityDescription: nil) ?? NSImage()
+        }
+        guard item.isAvailable, let url = item.url else {
+            cache.setObject(fallback, forKey: key)
+            return fallback
+        }
+
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: size * 2, height: size * 2),
+            scale: 2,
+            representationTypes: .all
+        )
+
+        let generated = await withCheckedContinuation { continuation in
+            QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+                continuation.resume(returning: representation?.nsImage)
+            }
+        }
+        let result = generated ?? fallback
+        cache.setObject(result, forKey: key)
+        return result
     }
 }
 

@@ -414,14 +414,16 @@
 				INFOPLIST_FILE = "Pull-Notch-Info.plist";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "macの各種アクティビティを監視し島に反映するために必要です";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Apple Musicで現在再生中の曲を表示するために使用します。";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "カレンダーの予定をウィジェットに表示するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "現在地から天気を取得するのに必要です";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "今日と期限超過のリマインダーを表示し、完了状態を更新するために使用します。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.6;
+				MARKETING_VERSION = 1.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "jp.amania.Pull-Notch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -455,14 +457,16 @@
 				INFOPLIST_FILE = "Pull-Notch-Info.plist";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "macの各種アクティビティを監視し島に反映するために必要です";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "Apple Musicで現在再生中の曲を表示するために使用します。";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "カレンダーの予定をウィジェットに表示するために使用します。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "現在地から天気を取得するのに必要です";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "今日と期限超過のリマインダーを表示し、完了状態を更新するために使用します。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.6;
+				MARKETING_VERSION = 1.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "jp.amania.Pull-Notch";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

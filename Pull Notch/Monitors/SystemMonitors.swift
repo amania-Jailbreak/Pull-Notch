@@ -6,6 +6,7 @@ import CoreLocation
 import CoreMedia
 import Foundation
 import IOKit.ps
+import MapKit
 import Observation
 import ScreenCaptureKit
 
@@ -107,6 +108,7 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
     private static let fftLog2n = vDSP_Length(log2(Float(fftSize)))
     private weak var overlayModel: NotchOverlayModel?
     private let sampleHandlerQueue = DispatchQueue(label: "jp.amania.Pull-Notch.visualizer-audio")
+    private let videoDiscardQueue = DispatchQueue(label: "jp.amania.Pull-Notch.visualizer-video-discard")
     private let fftSetup = vDSP_create_fftsetup(vDSP_Length(log2(Float(fftSize))), FFTRadix(kFFTRadix2))
     private lazy var fftWindow: [Float] = {
         var window = [Float](repeating: 0, count: Self.fftSize)
@@ -114,6 +116,8 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
         return window
     }()
     private var stream: SCStream?
+    private var captureTask: Task<Void, Never>?
+    private var captureGeneration = 0
     private var mode: NowPlayingVisualizerMode = .fake
 
     func start(using overlayModel: NotchOverlayModel) {
@@ -127,31 +131,45 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
             self.overlayModel = overlayModel
         }
 
-        Task {
+        captureGeneration += 1
+        let generation = captureGeneration
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            guard let self else { return }
             if mode == .real {
-                await restartCapture()
+                await restartCapture(generation: generation)
             } else {
                 await stopCapture()
             }
         }
     }
 
-    private func restartCapture() async {
+    func screenConfigurationDidChange(using overlayModel: NotchOverlayModel) {
+        guard mode == .real else { return }
+        setMode(.real, using: overlayModel)
+    }
+
+    private func restartCapture(generation: Int) async {
         await stopCapture()
 
-        guard mode == .real else { return }
+        guard isCurrentCapture(generation) else { return }
         guard await requestScreenCaptureAccessIfNeeded() else {
-            await MainActor.run {
-                overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+            guard isCurrentCapture(generation) else { return }
+            await MainActor.run { [weak self] in
+                self?.overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+                self?.captureTask = nil
             }
             return
         }
+        guard isCurrentCapture(generation) else { return }
 
         do {
             let shareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard isCurrentCapture(generation) else { return }
             guard let display = shareableContent.displays.first else {
-                await MainActor.run {
-                    overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+                await MainActor.run { [weak self] in
+                    self?.overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+                    self?.captureTask = nil
                 }
                 return
             }
@@ -172,21 +190,39 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
             configuration.channelCount = 2
             configuration.width = 2
             configuration.height = 2
-            configuration.queueDepth = 3
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+            configuration.showsCursor = false
+            configuration.queueDepth = 1
 
             let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+            // ScreenCaptureKit still produces a video queue for an
+            // audio-enabled SCStream. Register a very low-frequency sink so
+            // its remote queue never targets a missing output.
+            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoDiscardQueue)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleHandlerQueue)
             try await stream.startCapture()
+
+            guard isCurrentCapture(generation) else {
+                try? await stream.stopCapture()
+                return
+            }
             self.stream = stream
 
-            await MainActor.run {
-                overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: true)
+            await MainActor.run { [weak self] in
+                self?.overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: true)
+                self?.captureTask = nil
             }
         } catch {
-            await MainActor.run {
-                overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+            guard isCurrentCapture(generation) else { return }
+            await MainActor.run { [weak self] in
+                self?.overlayModel?.updateLiveVisualizerLevels(Self.restingLevels, isAvailable: false)
+                self?.captureTask = nil
             }
         }
+    }
+
+    private func isCurrentCapture(_ generation: Int) -> Bool {
+        !Task.isCancelled && mode == .real && captureGeneration == generation
     }
 
     private func stopCapture() async {
@@ -213,6 +249,7 @@ final class ScreenAudioVisualizerMonitor: NSObject, SCStreamOutput {
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        guard stream === self.stream else { return }
         guard outputType == .audio, sampleBuffer.isValid else { return }
         handleAudioSampleBuffer(sampleBuffer)
     }
@@ -500,10 +537,10 @@ final class SystemVolumeMonitor {
             return nil
         }
 
-        var name: CFString = "" as CFString
-        var size = UInt32(MemoryLayout<CFString>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
-        guard status == noErr else { return nil }
+        var unmanagedName: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &unmanagedName)
+        guard status == noErr, let name = unmanagedName?.takeUnretainedValue() else { return nil }
         return name as String
     }
 }
@@ -511,21 +548,25 @@ final class SystemVolumeMonitor {
 @MainActor
 final class SystemBatteryMonitor {
     private var pollingTask: Task<Void, Never>?
-    private var lastStatus: (level: Int, isCharging: Bool, chargingWatts: Double?)?
 
     func start(using overlayModel: NotchOverlayModel) {
         pollingTask?.cancel()
 
         pollingTask = Task {
+            var nextAccessoryRefresh = Date.distantPast
             while !Task.isCancelled {
                 let status = currentBatteryStatus()
                 overlayModel.updateBattery(
                     level: status?.level,
                     isCharging: status?.isCharging ?? false,
-                    chargingWatts: status?.chargingWatts,
-                    previousStatus: lastStatus
+                    chargingWatts: status?.chargingWatts
                 )
-                lastStatus = status
+                if overlayModel.isFeatureEnabled(.battery), Date() >= nextAccessoryRefresh {
+                    let devices = await BluetoothBatteryReader.readDevices()
+                    guard !Task.isCancelled else { return }
+                    overlayModel.updateAccessoryBatteries(devices)
+                    nextAccessoryRefresh = Date().addingTimeInterval(60)
+                }
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -570,12 +611,119 @@ final class SystemBatteryMonitor {
     }
 }
 
+nonisolated private enum BluetoothBatteryReader {
+    static func readDevices() async -> [AccessoryBatteryDevice] {
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+            process.arguments = ["SPBluetoothDataType", "-json", "-detailLevel", "mini"]
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else { return [] }
+                return parseDevices(from: data)
+            } catch {
+                return []
+            }
+        }.value
+    }
+
+    private static func parseDevices(from data: Data) -> [AccessoryBatteryDevice] {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let adapters = root["SPBluetoothDataType"] as? [[String: Any]]
+        else { return [] }
+
+        var devices: [AccessoryBatteryDevice] = []
+        for adapter in adapters {
+            devices += parseDeviceGroup(adapter["device_connected"], isConnected: true)
+            devices += parseDeviceGroup(adapter["device_not_connected"], isConnected: false)
+        }
+
+        return devices
+            .reduce(into: [String: AccessoryBatteryDevice]()) { result, device in
+                if result[device.id] == nil || device.isConnected {
+                    result[device.id] = device
+                }
+            }
+            .values
+            .sorted {
+                if $0.isConnected != $1.isConnected { return $0.isConnected }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+    }
+
+    private static func parseDeviceGroup(_ value: Any?, isConnected: Bool) -> [AccessoryBatteryDevice] {
+        guard let entries = value as? [[String: Any]] else { return [] }
+        return entries.flatMap { entry in
+            entry.compactMap { name, rawProperties in
+                guard let properties = rawProperties as? [String: Any] else { return nil }
+                return makeDevice(name: name, properties: properties, isConnected: isConnected)
+            }
+        }
+    }
+
+    private static func makeDevice(
+        name: String,
+        properties: [String: Any],
+        isConnected: Bool
+    ) -> AccessoryBatteryDevice? {
+        let overall = percent(properties["device_batteryLevel"])
+        let left = percent(properties["device_batteryLevelLeft"])
+        let right = percent(properties["device_batteryLevelRight"])
+        let batteryCase = percent(properties["device_batteryLevelCase"])
+        let levels = [left, right, batteryCase, overall].compactMap { $0 }
+        guard !levels.isEmpty else { return nil }
+
+        let level = overall ?? [left, right].compactMap { $0 }.min() ?? batteryCase ?? levels[0]
+        var parts: [String] = []
+        if let left { parts.append("L \(left)%") }
+        if let right { parts.append("R \(right)%") }
+        if let batteryCase { parts.append("Case \(batteryCase)%") }
+        if parts.isEmpty { parts.append("\(level)%") }
+
+        let type = properties["device_minorType"] as? String
+        return AccessoryBatteryDevice(
+            id: name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current),
+            name: name,
+            level: max(0, min(100, level)),
+            detailText: parts.joined(separator: "  "),
+            symbolName: symbolName(for: name, type: type),
+            isConnected: isConnected
+        )
+    }
+
+    private static func percent(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber { return number.intValue }
+        guard let text = value as? String else { return nil }
+        return Int(text.trimmingCharacters(in: CharacterSet(charactersIn: "%")))
+    }
+
+    private static func symbolName(for name: String, type: String?) -> String {
+        let value = "\(name) \(type ?? "")".lowercased()
+        if value.contains("airpod") { return "airpodspro" }
+        if value.contains("headphone") || value.contains("headset") { return "headphones" }
+        if value.contains("mouse") { return "computermouse.fill" }
+        if value.contains("keyboard") { return "keyboard.fill" }
+        if value.contains("trackpad") { return "rectangle.and.hand.point.up.left.fill" }
+        if value.contains("gamepad") || value.contains("controller") { return "gamecontroller.fill" }
+        if value.contains("iphone") { return "iphone" }
+        return "dot.radiowaves.left.and.right"
+    }
+}
+
 @MainActor
 final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
     private let locationManager = CLLocationManager()
-    private let geocoder = CLGeocoder()
+    private var geocodingRequest: MKGeocodingRequest?
     private weak var overlayModel: NotchOverlayModel?
     private var refreshTask: Task<Void, Never>?
+    private var locationLookupTask: Task<Void, Never>?
     private var latestCoordinate: CLLocationCoordinate2D?
     private var manualLocationQuery: String?
 
@@ -590,7 +738,6 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
 
         if manualLocationQuery != nil {
             startRefreshLoop()
-            Task { await resolveManualLocationAndFetch() }
         } else {
             startAutomaticLocationFlow()
         }
@@ -630,10 +777,13 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
         latestCoordinate = nil
         refreshTask?.cancel()
         refreshTask = nil
+        locationLookupTask?.cancel()
+        locationLookupTask = nil
+        geocodingRequest?.cancel()
+        geocodingRequest = nil
 
         if let manualLocationQuery, !manualLocationQuery.isEmpty {
             startRefreshLoop()
-            Task { await resolveManualLocationAndFetch() }
         } else {
             manualLocationQuery = nil
             startAutomaticLocationFlow()
@@ -641,7 +791,9 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
     }
 
     func refreshNow() {
-        Task { @MainActor in
+        locationLookupTask?.cancel()
+        locationLookupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             if manualLocationQuery != nil {
                 latestCoordinate = nil
                 await resolveManualLocationAndFetch()
@@ -687,39 +839,52 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
     }
 
     private func resolveManualLocationAndFetch() async {
-        guard let manualLocationQuery, !manualLocationQuery.isEmpty else { return }
+        guard let requestedLocation = manualLocationQuery, !requestedLocation.isEmpty else { return }
+        guard let request = MKGeocodingRequest(addressString: requestedLocation) else { return }
+        geocodingRequest?.cancel()
+        geocodingRequest = request
+        defer {
+            if geocodingRequest === request {
+                geocodingRequest = nil
+            }
+        }
 
         do {
-            let placemarks = try await geocoder.geocodeAddressString(manualLocationQuery)
-            latestCoordinate = placemarks.first?.location?.coordinate
+            let mapItems = try await request.mapItems
+            guard !Task.isCancelled, manualLocationQuery == requestedLocation else { return }
+            latestCoordinate = mapItems.first?.location.coordinate
             guard latestCoordinate != nil else {
                 overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
-                overlayModel?.updateWeatherLocationStatus(message: "'\(manualLocationQuery)' の場所を見つけられませんでした。", isError: true)
+                overlayModel?.updateWeatherLocationStatus(message: "'\(requestedLocation)' の場所を見つけられませんでした。", isError: true)
                 return
             }
-            await fetchWeather()
+            await fetchWeather(forManualLocation: requestedLocation)
         } catch {
+            guard !Task.isCancelled, manualLocationQuery == requestedLocation else { return }
             overlayModel?.updateWeather(temperatureText: nil, symbolName: nil)
-            overlayModel?.updateWeatherLocationStatus(message: "'\(manualLocationQuery)' の場所検索に失敗しました。", isError: true)
+            overlayModel?.updateWeatherLocationStatus(message: "'\(requestedLocation)' の場所検索に失敗しました。", isError: true)
         }
     }
 
-    private func fetchWeather() async {
+    private func fetchWeather(forManualLocation requestedLocation: String? = nil) async {
         guard let coordinate = latestCoordinate else { return }
         guard let overlayModel else { return }
 
         let latitude = coordinate.latitude
         let longitude = coordinate.longitude
-        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code&temperature_unit=celsius"
+        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=7&timezone=auto&temperature_unit=celsius"
         guard let url = URL(string: urlString) else { return }
 
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            if let requestedLocation, manualLocationQuery != requestedLocation { return }
             let response = try JSONDecoder().decode(OpenMeteoResponse.self, from: data)
             let temperature = Int(response.current.temperature2m.rounded())
             overlayModel.updateWeather(
                 temperatureText: "\(temperature)°",
-                symbolName: weatherSymbolName(for: response.current.weatherCode)
+                symbolName: weatherSymbolName(for: response.current.weatherCode),
+                forecast: response.forecastDays(using: weatherSymbolName(for:))
             )
             if let manualLocationQuery, !manualLocationQuery.isEmpty {
                 overlayModel.updateWeatherLocationStatus(
@@ -728,6 +893,8 @@ final class WeatherMonitor: NSObject, CLLocationManagerDelegate {
                 )
             }
         } catch {
+            guard !Task.isCancelled else { return }
+            if let requestedLocation, manualLocationQuery != requestedLocation { return }
             overlayModel.updateWeather(temperatureText: nil, symbolName: nil)
             if let manualLocationQuery, !manualLocationQuery.isEmpty {
                 overlayModel.updateWeatherLocationStatus(
@@ -768,6 +935,7 @@ extension String {
 
 private struct OpenMeteoResponse: Decodable {
     let current: Current
+    let daily: Daily
 
     struct Current: Decodable {
         let temperature2m: Double
@@ -776,6 +944,38 @@ private struct OpenMeteoResponse: Decodable {
         private enum CodingKeys: String, CodingKey {
             case temperature2m = "temperature_2m"
             case weatherCode = "weather_code"
+        }
+    }
+
+
+    struct Daily: Decodable {
+        let time: [String]
+        let weatherCode: [Int]
+        let temperature2mMax: [Double]
+        let temperature2mMin: [Double]
+
+        private enum CodingKeys: String, CodingKey {
+            case time
+            case weatherCode = "weather_code"
+            case temperature2mMax = "temperature_2m_max"
+            case temperature2mMin = "temperature_2m_min"
+        }
+    }
+
+    func forecastDays(using symbolName: (Int) -> String) -> [WeatherForecastDay] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        let count = min(7, daily.time.count, daily.weatherCode.count, daily.temperature2mMax.count, daily.temperature2mMin.count)
+        return (0..<count).compactMap { index in
+            guard let date = formatter.date(from: daily.time[index]) else { return nil }
+            return WeatherForecastDay(
+                date: date,
+                highTemperature: Int(daily.temperature2mMax[index].rounded()),
+                lowTemperature: Int(daily.temperature2mMin[index].rounded()),
+                symbolName: symbolName(daily.weatherCode[index])
+            )
         }
     }
 }

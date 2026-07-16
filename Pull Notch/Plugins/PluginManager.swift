@@ -14,6 +14,8 @@ final class PluginManager {
     private var runtimes: [String: LoadedPluginRuntime] = [:]
     private var discoveredBundles: [String: Bundle] = [:]
     private var runtimeInfos: [String: PluginRuntimeInfo] = [:]
+    private var lifecycleTasks: [String: Task<Void, Never>] = [:]
+    private var lifecycleGenerations: [String: Int] = [:]
 
     private static let enabledPluginKeyPrefix = "PullNotch.plugin.enabled."
 
@@ -25,11 +27,16 @@ final class PluginManager {
 
     func setPluginEnabled(id: String, isEnabled: Bool) {
         UserDefaults.standard.set(isEnabled, forKey: Self.enabledPluginKeyPrefix + id)
+        let generation = nextLifecycleGeneration(for: id)
+        lifecycleTasks[id]?.cancel()
 
         if isEnabled {
-            activatePluginIfPossible(id: id)
+            activatePluginIfPossible(id: id, generation: generation)
         } else {
-            Task { await deactivatePlugin(id: id) }
+            lifecycleTasks[id] = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await deactivatePlugin(id: id, generation: generation)
+            }
         }
     }
 
@@ -96,10 +103,11 @@ final class PluginManager {
             return
         }
 
-        activatePlugin(bundle: bundle, principalClass: principalClass)
+        let generation = nextLifecycleGeneration(for: manifest.id)
+        activatePlugin(bundle: bundle, principalClass: principalClass, generation: generation)
     }
 
-    private func activatePluginIfPossible(id: String) {
+    private func activatePluginIfPossible(id: String, generation: Int) {
         guard runtimes[id] == nil, let bundle = discoveredBundles[id] else {
             publishRuntimeInfos()
             return
@@ -119,21 +127,28 @@ final class PluginManager {
             return
         }
 
-        activatePlugin(bundle: bundle, principalClass: principalClass)
+        activatePlugin(bundle: bundle, principalClass: principalClass, generation: generation)
     }
 
-    private func activatePlugin(bundle: Bundle, principalClass: PullNotchPlugin.Type) {
+    private func activatePlugin(bundle: Bundle, principalClass: PullNotchPlugin.Type, generation: Int) {
         guard let overlayModel else { return }
 
         let plugin = principalClass.init()
         let manifest = principalClass.manifest
         let context = overlayModel.makePluginContext(for: manifest)
 
-        Task { @MainActor [weak self] in
+        lifecycleTasks[manifest.id] = Task { @MainActor [weak self] in
             guard let self else { return }
 
             do {
                 try await plugin.activate(context: context)
+                guard isCurrentLifecycle(generation, for: manifest.id), isPluginEnabled(manifest.id) else {
+                    await plugin.deactivate()
+                    if !isPluginEnabled(manifest.id) {
+                        overlayModel.unregisterPluginContent(for: manifest.id)
+                    }
+                    return
+                }
                 self.runtimes[manifest.id] = LoadedPluginRuntime(
                     bundle: bundle,
                     manifest: manifest,
@@ -150,6 +165,7 @@ final class PluginManager {
                     bundlePath: bundle.bundleURL.path
                 )
             } catch {
+                guard isCurrentLifecycle(generation, for: manifest.id) else { return }
                 overlayModel.unregisterPluginContent(for: manifest.id)
                 self.runtimeInfos[manifest.id] = PluginRuntimeInfo(
                     id: manifest.id,
@@ -162,13 +178,14 @@ final class PluginManager {
                 )
             }
 
+            self.lifecycleTasks[manifest.id] = nil
             self.publishRuntimeInfos()
         }
     }
 
-    private func deactivatePlugin(id: String) async {
+    private func deactivatePlugin(id: String, generation: Int) async {
         guard let runtime = runtimes.removeValue(forKey: id) else {
-            if let info = runtimeInfos[id] {
+            if isCurrentLifecycle(generation, for: id), let info = runtimeInfos[id] {
                 runtimeInfos[id] = PluginRuntimeInfo(
                     id: info.id,
                     displayName: info.displayName,
@@ -180,10 +197,12 @@ final class PluginManager {
                 )
                 publishRuntimeInfos()
             }
+            lifecycleTasks[id] = nil
             return
         }
 
         await runtime.plugin.deactivate()
+        guard isCurrentLifecycle(generation, for: id), !isPluginEnabled(id) else { return }
         overlayModel?.unregisterPluginContent(for: id)
 
         runtimeInfos[id] = PluginRuntimeInfo(
@@ -195,7 +214,18 @@ final class PluginManager {
             errorMessage: nil,
             bundlePath: runtime.bundle.bundleURL.path
         )
+        lifecycleTasks[id] = nil
         publishRuntimeInfos()
+    }
+
+    private func nextLifecycleGeneration(for id: String) -> Int {
+        let generation = (lifecycleGenerations[id] ?? 0) + 1
+        lifecycleGenerations[id] = generation
+        return generation
+    }
+
+    private func isCurrentLifecycle(_ generation: Int, for id: String) -> Bool {
+        !Task.isCancelled && lifecycleGenerations[id] == generation
     }
 
     private func publishRuntimeInfos() {

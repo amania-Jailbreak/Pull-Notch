@@ -1,21 +1,19 @@
 import Foundation
 import OSLog
 
-private let lyricsLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "LyricsService")
-
 #if canImport(MusanovaKit) && canImport(MusicKit)
 import MusanovaKit
 import MusicKit
 #endif
 
-private struct LyricsRequestKey: Hashable {
+nonisolated private struct LyricsRequestKey: Hashable {
     let trackName: String
     let artistName: String
     let albumName: String
     let durationSeconds: Int
 }
 
-private struct LrcLibLyrics: Decodable {
+nonisolated private struct LrcLibLyrics: Decodable {
     let id: Int
     let trackName: String
     let artistName: String
@@ -26,7 +24,7 @@ private struct LrcLibLyrics: Decodable {
     let syncedLyrics: String?
 }
 
-private struct PetitLyricsSong {
+nonisolated private struct PetitLyricsSong {
     let lyricsId: String
     let title: String
     let artist: String
@@ -34,53 +32,53 @@ private struct PetitLyricsSong {
     let availableLyricsType: Int
 }
 
-private struct PetitLyricsLine {
+nonisolated private struct PetitLyricsLine {
     let startTimeSeconds: TimeInterval
     let text: String
 }
 
-private struct PetitLyricsPayload {
+nonisolated private struct PetitLyricsPayload {
     let lyricsData: String
 }
 
-private struct AppleMusicSearchResponse: Decodable {
+nonisolated private struct AppleMusicSearchResponse: Decodable {
     let results: AppleMusicSearchResults
 }
 
-private struct AppleMusicSearchResults: Decodable {
+nonisolated private struct AppleMusicSearchResults: Decodable {
     let songs: AppleMusicSongs?
 }
 
-private struct AppleMusicSongs: Decodable {
+nonisolated private struct AppleMusicSongs: Decodable {
     let data: [AppleMusicSongSummary]
 }
 
-private struct AppleMusicSongSummary: Decodable {
+nonisolated private struct AppleMusicSongSummary: Decodable {
     let id: String
     let attributes: AppleMusicSongAttributes?
 }
 
-private struct AppleMusicSongAttributes: Decodable {
+nonisolated private struct AppleMusicSongAttributes: Decodable {
     let name: String?
     let artistName: String?
     let albumName: String?
     let durationInMillis: Int?
 }
 
-private struct QQMusicSearchResponse: Decodable {
+nonisolated private struct QQMusicSearchResponse: Decodable {
     let code: Int
     let data: QQMusicSearchData?
 }
 
-private struct QQMusicSearchData: Decodable {
+nonisolated private struct QQMusicSearchData: Decodable {
     let song: QQMusicSongContainer
 }
 
-private struct QQMusicSongContainer: Decodable {
+nonisolated private struct QQMusicSongContainer: Decodable {
     let list: [QQMusicSong]
 }
 
-private struct QQMusicSong: Decodable {
+nonisolated private struct QQMusicSong: Decodable {
     let songmid: String
     let songname: String
     let singer: [QQMusicSinger]
@@ -88,47 +86,48 @@ private struct QQMusicSong: Decodable {
     let interval: Int
 }
 
-private struct QQMusicSinger: Decodable {
+nonisolated private struct QQMusicSinger: Decodable {
     let name: String
 }
 
-private struct QQMusicLyricsResponse: Decodable {
+nonisolated private struct QQMusicLyricsResponse: Decodable {
     let code: Int
     let lyric: String?
 }
 
-private struct NetEaseSearchResponse: Decodable {
+nonisolated private struct NetEaseSearchResponse: Decodable {
     let result: NetEaseSearchResult
 }
 
-private struct NetEaseSearchResult: Decodable {
+nonisolated private struct NetEaseSearchResult: Decodable {
     let songs: [NetEaseSong]
 }
 
-private struct NetEaseSong: Decodable {
+nonisolated private struct NetEaseSong: Decodable {
     let id: Int
     let name: String
     let artists: [NetEaseArtist]
     let album: NetEaseAlbum
 }
 
-private struct NetEaseArtist: Decodable {
+nonisolated private struct NetEaseArtist: Decodable {
     let name: String
 }
 
-private struct NetEaseAlbum: Decodable {
+nonisolated private struct NetEaseAlbum: Decodable {
     let name: String
 }
 
-private struct NetEaseLyricsResponse: Decodable {
+nonisolated private struct NetEaseLyricsResponse: Decodable {
     let lrc: NetEaseLRC?
 }
 
-private struct NetEaseLRC: Decodable {
+nonisolated private struct NetEaseLRC: Decodable {
     let lyric: String?
 }
 
-actor LyricsService {
+actor LyricsService: LyricsLoading {
+    private let logger = Logger(subsystem: "jp.amania.Pull-Notch", category: "LyricsService")
     private enum LyricsFetchProvider: String, CaseIterable {
         case lrclib = "LRCLIB"
         case petitLyrics = "PetitLyrics"
@@ -354,7 +353,7 @@ actor LyricsService {
     }
 
     private func log(_ message: String) {
-        lyricsLog.debug("\(message, privacy: .private)")
+        logger.debug("\(message, privacy: .private)")
     }
 
     private func fetchExactMatch(key: LyricsRequestKey) async -> LrcLibLyrics? {
@@ -836,7 +835,7 @@ actor LyricsService {
     }
 }
 
-private final class PetitLyricsSearchParser: NSObject, XMLParserDelegate {
+nonisolated private final class PetitLyricsSearchParser: NSObject, XMLParserDelegate {
     private var songs: [PetitLyricsSong] = []
     private var currentSong: [String: String] = [:]
     private var currentElement = ""
@@ -898,7 +897,7 @@ private final class PetitLyricsSearchParser: NSObject, XMLParserDelegate {
     }
 }
 
-private final class PetitLyricsPayloadParser: NSObject, XMLParserDelegate {
+nonisolated private final class PetitLyricsPayloadParser: NSObject, XMLParserDelegate {
     private var currentElement = ""
     private var currentText = ""
     private var lyricsData: String?
@@ -935,7 +934,7 @@ private final class PetitLyricsPayloadParser: NSObject, XMLParserDelegate {
     }
 }
 
-private final class PetitLyricsLineParser: NSObject, XMLParserDelegate {
+nonisolated private final class PetitLyricsLineParser: NSObject, XMLParserDelegate {
     private var lines: [PetitLyricsLine] = []
     private var currentLineText = ""
     private var currentLineStartTime: TimeInterval?
@@ -1043,7 +1042,7 @@ private final class PetitLyricsLineParser: NSObject, XMLParserDelegate {
     }
 }
 
-private final class TTMLLyricParser: NSObject, XMLParserDelegate {
+nonisolated private final class TTMLLyricParser: NSObject, XMLParserDelegate {
     private var lines: [PetitLyricsLine] = []
     private var currentLineText = ""
     private var currentLineStartTime: TimeInterval?

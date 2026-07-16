@@ -14,14 +14,10 @@ import CoreMedia
 import Foundation
 import IOKit.ps
 import Observation
-import OSLog
 import PullNotchPluginKit
+import Quartz
 import ScreenCaptureKit
-import ServiceManagement
 import SwiftUI
-import UniformTypeIdentifiers
-
-private let appLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "App")
 
 @main
 struct Pull_NotchApp: App {
@@ -32,199 +28,6 @@ struct Pull_NotchApp: App {
             EmptyView()
         }
     }
-}
-
-private extension NSColor {
-    func withSaturation(multiplier: CGFloat) -> NSColor {
-        guard let converted = usingColorSpace(.deviceRGB) else { return self }
-
-        var hue: CGFloat = 0
-        var saturation: CGFloat = 0
-        var brightness: CGFloat = 0
-        var alpha: CGFloat = 0
-        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-
-        return NSColor(
-            calibratedHue: hue,
-            saturation: min(1, saturation * multiplier),
-            brightness: brightness,
-            alpha: alpha
-        )
-    }
-
-    func withBrightness(multiplier: CGFloat) -> NSColor {
-        guard let converted = usingColorSpace(.deviceRGB) else { return self }
-
-        var hue: CGFloat = 0
-        var saturation: CGFloat = 0
-        var brightness: CGFloat = 0
-        var alpha: CGFloat = 0
-        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-
-        return NSColor(
-            calibratedHue: hue,
-            saturation: saturation,
-            brightness: max(0.01, min(1, brightness * multiplier)),
-            alpha: alpha
-        )
-    }
-
-    var rgbComponents: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)? {
-        guard let converted = usingColorSpace(.deviceRGB) else { return nil }
-
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        converted.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return (red, green, blue, alpha)
-    }
-
-    var hsbComponents: (hue: CGFloat, saturation: CGFloat, brightness: CGFloat, alpha: CGFloat)? {
-        guard let converted = usingColorSpace(.deviceRGB) else { return nil }
-
-        var hue: CGFloat = 0
-        var saturation: CGFloat = 0
-        var brightness: CGFloat = 0
-        var alpha: CGFloat = 0
-        converted.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-        return (hue, saturation, brightness, alpha)
-    }
-
-    func distance(to other: NSColor) -> CGFloat {
-        guard
-            let lhs = rgbComponents,
-            let rhs = other.rgbComponents
-        else {
-            return 0
-        }
-
-        let red = lhs.red - rhs.red
-        let green = lhs.green - rhs.green
-        let blue = lhs.blue - rhs.blue
-        return sqrt((red * red) + (green * green) + (blue * blue))
-    }
-}
-
-private struct ArtworkPalette {
-    let mainColor: NSColor
-    let subColor: NSColor
-}
-
-private struct GitHubRelease: Decodable {
-    let tagName: String
-    let htmlURL: URL
-
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case htmlURL = "html_url"
-    }
-}
-
-private struct AppReleaseVersion: Comparable {
-    let version: [Int]
-    let build: Int
-
-    static func < (lhs: AppReleaseVersion, rhs: AppReleaseVersion) -> Bool {
-        let componentCount = max(lhs.version.count, rhs.version.count)
-        for index in 0..<componentCount {
-            let lhsComponent = index < lhs.version.count ? lhs.version[index] : 0
-            let rhsComponent = index < rhs.version.count ? rhs.version[index] : 0
-            if lhsComponent != rhsComponent {
-                return lhsComponent < rhsComponent
-            }
-        }
-        return lhs.build < rhs.build
-    }
-}
-
-private final class GitHubUpdateChecker {
-    private static let latestReleaseURL = URL(string: "https://api.github.com/repos/amania-Jailbreak/Pull-Notch/releases/latest")!
-    private static let lastAutomaticCheckKey = "PullNotch.update.lastAutomaticCheck"
-    private static let lastNotifiedTagKey = "PullNotch.update.lastNotifiedTag"
-    private let session: URLSession
-
-    init() {
-        let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 8
-        configuration.timeoutIntervalForResource = 10
-        configuration.httpAdditionalHeaders = [
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Pull Notch Update Checker"
-        ]
-        session = URLSession(configuration: configuration)
-    }
-
-    func checkAutomatically() async -> (release: GitHubRelease, version: AppReleaseVersion)? {
-        let now = Date()
-        let lastCheck = UserDefaults.standard.object(forKey: Self.lastAutomaticCheckKey) as? Date
-        if let lastCheck, now.timeIntervalSince(lastCheck) < 60 * 60 * 24 {
-            return nil
-        }
-
-        UserDefaults.standard.set(now, forKey: Self.lastAutomaticCheckKey)
-
-        guard let result = await latestUpdate() else { return nil }
-        guard UserDefaults.standard.string(forKey: Self.lastNotifiedTagKey) != result.release.tagName else { return nil }
-        UserDefaults.standard.set(result.release.tagName, forKey: Self.lastNotifiedTagKey)
-        return result
-    }
-
-    private func latestUpdate() async -> (release: GitHubRelease, version: AppReleaseVersion)? {
-        guard let currentVersion = Self.currentAppVersion() else { return nil }
-
-        do {
-            let (data, response) = try await session.data(from: Self.latestReleaseURL)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return nil }
-
-            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            guard let latestVersion = Self.releaseVersion(fromTag: release.tagName) else { return nil }
-            guard currentVersion < latestVersion else { return nil }
-            return (release, latestVersion)
-        } catch {
-            return nil
-        }
-    }
-
-    private static func currentAppVersion() -> AppReleaseVersion? {
-        let info = Bundle.main.infoDictionary
-        guard
-            let rawVersion = info?["CFBundleShortVersionString"] as? String,
-            let rawBuild = info?["CFBundleVersion"] as? String,
-            let build = Int(rawBuild)
-        else {
-            return nil
-        }
-
-        return AppReleaseVersion(
-            version: rawVersion.split(separator: ".").compactMap { Int($0) },
-            build: build
-        )
-    }
-
-    private static func releaseVersion(fromTag tag: String) -> AppReleaseVersion? {
-        let pattern = #"^v([0-9]+(?:\.[0-9]+)*)-build-([0-9]+)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(tag.startIndex..., in: tag)
-        guard
-            let match = regex.firstMatch(in: tag, range: range),
-            let versionRange = Range(match.range(at: 1), in: tag),
-            let buildRange = Range(match.range(at: 2), in: tag),
-            let build = Int(tag[buildRange])
-        else {
-            return nil
-        }
-
-        return AppReleaseVersion(
-            version: tag[versionRange].split(separator: ".").compactMap { Int($0) },
-            build: build
-        )
-    }
-}
-
-enum NotchOverlayDisplayMode {
-    case macDisplay
-    case externalDisplay
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -245,8 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var spaceKeyMonitor: Any?
     private var mousePassthroughMonitor: Any?
     private var sharingPicker: NSSharingServicePicker?
+    private var pinnedFileOpenPanel: NSOpenPanel?
+    private let pinnedFileQuickLookController = PinnedFileQuickLookController()
     private var lastScrollPageSwitchAt: TimeInterval = 0
     private var lastOverlayFrame: NSRect?
+    private var overlayScreenID: CGDirectDisplayID?
+    private var screenChangeWorkItem: DispatchWorkItem?
+    private var isUpdatingOverlayPosition = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -268,13 +76,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayModel.sharePinnedFileHandler = { [weak self] url in
             self?.showSharePicker(for: url)
         }
+        overlayModel.quickLookPinnedFileHandler = { [weak self] url in
+            self?.showQuickLook(for: url)
+        }
+        overlayModel.choosePinnedFilesHandler = { [weak self] in
+            self?.showPinnedFileChooser()
+        }
         createOverlayWindow()
         overlayModel.presentOnboardingIfNeeded()
         observeOverlaySize()
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(updateOverlayPosition),
+            selector: #selector(screenParametersDidChange),
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
@@ -290,6 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pluginManager.start(using: overlayModel)
         pluginBridgeServer.start(using: overlayModel)
         scheduleAutomaticUpdateCheck()
+        MenuBarManager.shared.restoreOnLaunchIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MenuBarManager.shared.deactivate()
     }
 
     private func scheduleAutomaticUpdateCheck() {
@@ -303,9 +122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showUpdateAvailableAlert(release: GitHubRelease, version: AppReleaseVersion) {
-        let versionText = version.version.map(String.init).joined(separator: ".")
         let alert = NSAlert()
-        alert.messageText = "Pull Notch \(versionText) が利用可能です"
+        alert.messageText = "Pull Notch \(version.displayText) が利用可能です"
         alert.informativeText = "新しいバージョンがGitHub Releasesで公開されています。"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "リリースページを開く")
@@ -316,13 +134,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func updateOverlayPosition() {
-        guard
-            let screen = NSScreen.main ?? NSScreen.screens.first,
-            let overlayWindow
-        else {
-            return
+    @objc private func screenParametersDidChange() {
+        screenChangeWorkItem?.cancel()
+        lastOverlayFrame = nil
+        refreshOverlayScreenSelection()
+        updateOverlayPosition()
+
+        // AppKit can publish several screen-parameter notifications while it
+        // is still settling the new coordinate space. Re-apply the same
+        // selected screen after that burst instead of deriving a new target
+        // from the panel's temporary frame on every notification.
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lastOverlayFrame = nil
+            self.updateOverlayPosition()
+            self.screenAudioMonitor.screenConfigurationDidChange(using: self.overlayModel)
         }
+        screenChangeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+    }
+
+    @objc private func updateOverlayPosition() {
+        guard let overlayWindow else { return }
+        guard !isUpdatingOverlayPosition else { return }
+        guard let screen = selectedOverlayScreen(fallbackWindow: overlayWindow) else { return }
+
+        isUpdatingOverlayPosition = true
+        defer { isUpdatingOverlayPosition = false }
 
         overlayModel.setDisplayMode(isBuiltInDisplay(screen) ? .macDisplay : .externalDisplay)
 
@@ -342,8 +180,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateOverlayMousePassthrough()
     }
 
+    private func selectedOverlayScreen(fallbackWindow: NSWindow) -> NSScreen? {
+        if let overlayScreenID,
+           let selectedScreen = NSScreen.screens.first(where: { displayID(for: $0) == overlayScreenID }) {
+            return selectedScreen
+        }
+
+        let fallback = availableScreen(matching: fallbackWindow.screen)
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        overlayScreenID = fallback.flatMap { displayID(for: $0) }
+        return fallback
+    }
+
+    private func refreshOverlayScreenSelection() {
+        guard let overlayWindow else { return }
+
+        if let overlayScreenID,
+           let selectedScreen = NSScreen.screens.first(where: { displayID(for: $0) == overlayScreenID }) {
+            let intersection = overlayWindow.frame.intersection(selectedScreen.frame)
+            let intersectionArea = max(0, intersection.width) * max(0, intersection.height)
+            let windowArea = overlayWindow.frame.width * overlayWindow.frame.height
+            if intersectionArea >= windowArea * 0.5 {
+                return
+            }
+        }
+
+        let fallback = availableScreen(matching: overlayWindow.screen)
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        overlayScreenID = fallback.flatMap { displayID(for: $0) }
+        lastOverlayFrame = nil
+    }
+
+    private func availableScreen(matching candidate: NSScreen?) -> NSScreen? {
+        guard let candidateID = candidate.flatMap({ displayID(for: $0) }) else { return nil }
+        return NSScreen.screens.first(where: { displayID(for: $0) == candidateID })
+    }
+
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+    }
+
     private func isBuiltInDisplay(_ screen: NSScreen) -> Bool {
-        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+        guard let displayID = displayID(for: screen) else {
             return true
         }
         return CGDisplayIsBuiltin(displayID) != 0
@@ -375,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = NotchHostingView(overlayModel: overlayModel)
 
         overlayWindow = window
+        overlayScreenID = (NSScreen.main ?? NSScreen.screens.first).flatMap { displayID(for: $0) }
         updateOverlayPosition()
         window.orderFrontRegardless()
     }
@@ -388,8 +269,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             window = SettingsPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 368, height: 340),
-                styleMask: [.titled, .closable, .fullSizeContentView],
+                contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+                styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
@@ -399,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.backgroundColor = .clear
             window.isOpaque = false
+            window.minSize = NSSize(width: 940, height: 640)
             window.center()
             window.contentView = NSHostingView(rootView: SettingsWindowView(overlayModel: overlayModel))
             settingsWindow = window
@@ -414,6 +296,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let picker = NSSharingServicePicker(items: [url])
         picker.show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
         sharingPicker = picker
+    }
+
+    private func showQuickLook(for url: URL) {
+        pinnedFileQuickLookController.present(url: url)
+    }
+
+    private func showPinnedFileChooser() {
+        guard pinnedFileOpenPanel == nil else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Add Files to Pull Notch"
+        panel.prompt = "Add"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        pinnedFileOpenPanel = panel
+
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            defer { self.pinnedFileOpenPanel = nil }
+            guard response == .OK else { return }
+            self.overlayModel.pinFiles(panel.urls)
+        }
     }
 
     private func observeOverlaySize() {
@@ -432,7 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let self,
                 let expandedPanel = self.overlayModel.expandedPanel,
                 expandedPanel != .onboarding,
-                let overlayWindow
+                self.overlayWindow != nil
             else {
                 return
             }
@@ -450,7 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard
                 let self,
-                let overlayWindow
+                self.overlayWindow != nil
             else {
                 return event
             }
@@ -458,12 +365,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let location = NSEvent.mouseLocation
             guard self.overlayInteractiveFrameInScreen().contains(location) else { return event }
 
+            if self.overlayModel.expandedPanel == .musicPlayer,
+               self.overlayModel.activeExpandedBuiltInPage == .pinnedFile {
+                return event
+            }
+
             let horizontalDelta = abs(event.scrollingDeltaX)
             let verticalDelta = abs(event.scrollingDeltaY)
             let dominantDelta = max(horizontalDelta, verticalDelta)
             let secondaryDelta = min(horizontalDelta, verticalDelta)
             guard dominantDelta >= 18 else { return event }
             guard secondaryDelta <= dominantDelta * 0.65 else { return event }
+
+            if self.overlayModel.expandedPanel == .musicPlayer,
+               self.overlayModel.activeExpandedBuiltInPage == .widgetBoard,
+               verticalDelta > horizontalDelta {
+                return event
+            }
 
             let now = ProcessInfo.processInfo.systemUptime
 
@@ -505,11 +423,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func observeSpaceKeyForToastDismissal() {
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 49,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+               let self,
+               self.overlayModel.expandedPanel == .musicPlayer,
+               self.overlayModel.activeExpandedBuiltInPage == .pinnedFile,
+               self.overlayModel.selectedPinnedFile?.isAvailable == true {
+                self.overlayModel.quickLookPinnedFile()
+                return nil
+            }
+
             guard
                 event.keyCode == 49,
                 event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
                 let self,
-                let overlayWindow,
+                self.overlayWindow != nil,
                 self.overlayInteractiveFrameInScreen().contains(NSEvent.mouseLocation),
                 self.overlayModel.handleToastSpaceKey()
             else {
@@ -584,6 +512,31 @@ final class NotchHostingView: NSHostingView<ContentView> {
     }
 }
 
+final class PinnedFileQuickLookController: NSObject, QLPreviewPanelDataSource {
+    private var previewURL: URL?
+
+    func present(url: URL) {
+        guard let panel = QLPreviewPanel.shared() else { return }
+        if panel.isVisible, previewURL == url {
+            panel.orderOut(nil)
+            return
+        }
+        previewURL = url
+        panel.dataSource = self
+        panel.reloadData()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> any QLPreviewItem {
+        previewURL! as NSURL
+    }
+}
+
 final class SettingsPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -615,74 +568,142 @@ struct SettingsWindowView: View {
     @Bindable var overlayModel: NotchOverlayModel
     @State private var selectedTab: SettingsTab = .general
     @State private var manualWeatherLocationDraft = ""
+    @State private var menuBarManagerActive = false
+    @State private var menuBarHiddenItemCount = 0
+    @State private var menuBarAccessibilityChecked = false
+    @State private var confirmsClearingPinnedFiles = false
+
+    private func toggleMenuBarManagement() {
+        if menuBarManagerActive {
+            MenuBarManager.shared.deactivate()
+            menuBarManagerActive = false
+            menuBarHiddenItemCount = 0
+        } else {
+            let granted = MenuBarManager.shared.checkAccessibilityPermission(prompt: true)
+            menuBarAccessibilityChecked = granted
+            guard granted else { return }
+
+            MenuBarManager.shared.activate()
+            menuBarManagerActive = true
+            menuBarHiddenItemCount = MenuBarManager.shared.hiddenItemsInfo().count
+        }
+    }
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color.black, Color(red: 0.045, green: 0.045, blue: 0.065), Color(red: 0.09, green: 0.07, blue: 0.12)],
+                colors: [
+                    Color(red: 0.025, green: 0.027, blue: 0.038),
+                    Color(red: 0.055, green: 0.05, blue: 0.085),
+                    Color(red: 0.035, green: 0.055, blue: 0.075)
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                HStack(alignment: .top, spacing: 18) {
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
                     tabPicker
+                    Spacer(minLength: 18)
+                    sidebarFooter
+                }
+                .padding(18)
+                .frame(width: 248)
+                .background(.black.opacity(0.18))
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.07))
+                    .frame(width: 1)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    contentHeader
+                    Rectangle()
+                        .fill(Color.white.opacity(0.065))
+                        .frame(height: 1)
                     tabContent
                 }
             }
-            .padding(24)
         }
-        .frame(minWidth: 1100, minHeight: 680)
+        .frame(minWidth: 940, minHeight: 640)
+        .preferredColorScheme(.dark)
         .onAppear {
             manualWeatherLocationDraft = overlayModel.manualWeatherLocation ?? ""
+            menuBarAccessibilityChecked = MenuBarManager.shared.checkAccessibilityPermission(prompt: false)
+            menuBarManagerActive = MenuBarManager.shared.isActive
+            menuBarHiddenItemCount = MenuBarManager.shared.hiddenItemsInfo().count
         }
         .onChange(of: overlayModel.manualWeatherLocation) { _, newValue in
             manualWeatherLocationDraft = newValue ?? ""
         }
+        .alert(
+            "\(overlayModel.pinnedFiles.count)件のピン留めをすべて解除しますか？",
+            isPresented: $confirmsClearingPinnedFiles
+        ) {
+            Button("キャンセル", role: .cancel) {}
+            Button("すべて解除", role: .destructive) {
+                overlayModel.clearPinnedFiles()
+            }
+        } message: {
+            Text("並び順を含むファイル棚の内容が削除されます。元のファイルは削除されません。")
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "capsule.tophalf.filled")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(red: 0.55, green: 0.48, blue: 1), Color(red: 0.25, green: 0.72, blue: 1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Image(systemName: "capsule.tophalf.filled")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 40, height: 40)
+            .shadow(color: Color(red: 0.45, green: 0.55, blue: 1).opacity(0.28), radius: 12, y: 5)
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Pull Notch Settings")
-                    .font(.system(size: 26, weight: .bold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Pull Notch")
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
 
-                Text("表示、Widget、天気、Pluginをここからまとめて調整できます。")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.58))
+                Text("Settings")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
             }
 
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 8)
+        .padding(.top, 5)
+        .padding(.bottom, 24)
     }
 
     private var tabPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("PREFERENCES")
+                .font(.system(size: 9, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.28))
+                .padding(.horizontal, 10)
+                .padding(.bottom, 3)
             ForEach(SettingsTab.allCases) { tab in
                 tabPickerButton(for: tab)
             }
         }
-        .frame(width: 198, alignment: .topLeading)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.clear)
-        )
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func tabPickerButton(for tab: SettingsTab) -> some View {
         let isSelected = selectedTab == tab
-        let subtitleColor: Color = isSelected ? .black.opacity(0.68) : .white.opacity(0.42)
-        let foregroundColor: Color = isSelected ? .black : .white.opacity(0.84)
-        let backgroundFill: Color = isSelected ? .white : .clear
+        let subtitleColor: Color = isSelected ? .white.opacity(0.62) : .white.opacity(0.35)
+        let foregroundColor: Color = isSelected ? .white : .white.opacity(0.72)
 
         return Button {
             withAnimation(.easeOut(duration: 0.16)) {
@@ -691,8 +712,9 @@ struct SettingsWindowView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: iconName(for: tab))
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 18)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 27, height: 27)
+                    .background(Color.white.opacity(isSelected ? 0.12 : 0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tab.title)
@@ -706,19 +728,78 @@ struct SettingsWindowView: View {
                 Spacer(minLength: 0)
 
                 if isSelected {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .bold))
+                    Circle()
+                        .fill(Color(red: 0.48, green: 0.74, blue: 1))
+                        .frame(width: 6, height: 6)
                 }
             }
             .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(backgroundFill)
-            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Capsule()
+                        .fill(Color(red: 0.42, green: 0.7, blue: 1))
+                        .frame(width: 3, height: 30)
+                        .offset(x: -5)
+                }
+            }
         }
         .buttonStyle(.plain)
+    }
+
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: .green.opacity(0.5), radius: 4)
+                Text("All changes saved")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+
+            Text("Settings are applied immediately.")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.28))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var contentHeader: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Image(systemName: iconName(for: selectedTab))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.63, green: 0.78, blue: 1))
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(selectedTab.title)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(pageDescription(for: selectedTab))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            Spacer(minLength: 0)
+
+            Text("LIVE")
+                .font(.system(size: 8, weight: .bold))
+                .tracking(1)
+                .foregroundStyle(Color.green.opacity(0.85))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(Color.green.opacity(0.1), in: Capsule())
+        }
+        .padding(.horizontal, 26)
+        .padding(.top, 21)
+        .padding(.bottom, 17)
     }
 
     @ViewBuilder
@@ -729,12 +810,15 @@ struct SettingsWindowView: View {
                 LazyVStack(spacing: 14) {
                     featureSection
                     pinnedFileSection
+                    menuBarSection
                 }
                 .padding(.vertical, 2)
             case .widgets:
                 LazyVStack(spacing: 14) {
                     nowPlayingSection
                     toastSection
+                    dashboardWidgetBoardSection
+                    reminderWidgetSettingsSection
                     compactWidgetPrioritySection
                 }
                 .padding(.vertical, 2)
@@ -750,6 +834,8 @@ struct SettingsWindowView: View {
                 .padding(.vertical, 2)
             }
         }
+        .contentMargins(.horizontal, 26, for: .scrollContent)
+        .contentMargins(.vertical, 22, for: .scrollContent)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .scrollIndicators(.hidden)
     }
@@ -912,12 +998,12 @@ struct SettingsWindowView: View {
         } label: {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(overlayModel.nowPlayingVisualizerMode == mode ? .black : .white.opacity(0.84))
+                .foregroundStyle(.white.opacity(overlayModel.nowPlayingVisualizerMode == mode ? 0.96 : 0.68))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(overlayModel.nowPlayingVisualizerMode == mode ? Color.white : Color.white.opacity(0.06))
+                        .fill(overlayModel.nowPlayingVisualizerMode == mode ? Color(red: 0.36, green: 0.64, blue: 1) : Color.white.opacity(0.05))
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(Color.white.opacity(overlayModel.nowPlayingVisualizerMode == mode ? 0 : 0.08), lineWidth: 1)
@@ -931,19 +1017,52 @@ struct SettingsWindowView: View {
         settingsCard {
             VStack(alignment: .leading, spacing: 12) {
                 sectionHeader(
-                    title: "Pinned File",
-                    subtitle: "ノッチにファイルをドラッグすると、ここからすぐ扱えます。"
+                    title: "Pinned File Shelf",
+                    subtitle: "ノッチへのドロップまたは選択画面から、最大12件を追加できます。"
                 )
 
-                Text(overlayModel.pinnedFileURL?.lastPathComponent ?? "まだピン留めされたファイルはありません。")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Text("\(overlayModel.pinnedFiles.count) / \(overlayModel.maximumPinnedFileCount)")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.9))
 
-                if overlayModel.pinnedFileURL != nil {
-                    buttonChip("ピン留めを解除", emphasized: false) {
-                        overlayModel.clearPinnedFile()
+                    if let selected = overlayModel.selectedPinnedFile {
+                        Text("Selected: \(selected.displayName)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(selected.isAvailable ? Color.white.opacity(0.72) : Color.orange.opacity(0.9))
+                            .lineLimit(1)
+                    } else {
+                        Text("まだピン留めされたファイルはありません。")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.07))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.38, green: 0.66, blue: 1), Color(red: 0.62, green: 0.52, blue: 1)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: proxy.size.width * CGFloat(overlayModel.pinnedFiles.count) / CGFloat(max(1, overlayModel.maximumPinnedFileCount)))
+                    }
+                }
+                .frame(height: 5)
+
+                HStack(spacing: 8) {
+                    buttonChip("Add Files…", emphasized: true) {
+                        overlayModel.choosePinnedFiles()
+                    }
+
+                    if !overlayModel.pinnedFiles.isEmpty {
+                        buttonChip("すべて解除", emphasized: false) {
+                            confirmsClearingPinnedFiles = true
+                        }
                     }
                 }
             }
@@ -967,11 +1086,211 @@ struct SettingsWindowView: View {
         }
     }
 
+    private var dashboardWidgetBoardSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 14) {
+                sectionHeader(
+                    title: "Expanded Widget Board",
+                    subtitle: "拡大表示の左右2ペインに表示するwidgetを選びます。同じwidgetを両側に配置できます。"
+                )
+
+                HStack(alignment: .top, spacing: 12) {
+                    dashboardSlotSettings(.leading)
+                    dashboardSlotSettings(.trailing)
+                }
+            }
+        }
+    }
+
+    private var reminderWidgetSettingsSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader(
+                    title: "Today Tasks",
+                    subtitle: "今日と期限超過のApple Remindersを表示するリストを選びます。"
+                )
+
+                switch overlayModel.reminderAccessState {
+                case .authorized:
+                    if overlayModel.reminderLists.isEmpty {
+                        Text("利用できるリマインダーリストがありません。")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.45))
+                    } else {
+                        VStack(spacing: 7) {
+                            ForEach(overlayModel.reminderLists) { list in
+                                Button {
+                                    overlayModel.setReminderListEnabled(
+                                        id: list.id,
+                                        isEnabled: !overlayModel.isReminderListEnabled(id: list.id)
+                                    )
+                                } label: {
+                                    HStack(spacing: 9) {
+                                        Image(systemName: overlayModel.isReminderListEnabled(id: list.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(overlayModel.isReminderListEnabled(id: list.id) ? Color.white : Color.white.opacity(0.28))
+                                        Text(list.title)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(.white.opacity(0.82))
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 2)
+                                    .padding(.vertical, 9)
+                                    .overlay(alignment: .bottom) {
+                                        Rectangle().fill(Color.white.opacity(0.055)).frame(height: 1)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                case .notDetermined:
+                    HStack(spacing: 9) {
+                        Text("Apple Remindersへのアクセスが必要です。")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.48))
+                        Spacer(minLength: 0)
+                        buttonChip("アクセスを許可", emphasized: true) {
+                            Task { await overlayModel.requestReminderAccess() }
+                        }
+                    }
+                case .requesting:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("権限を確認しています…")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.48))
+                    }
+                case .denied, .restricted:
+                    HStack(spacing: 9) {
+                        Text("システム設定でRemindersへのアクセスを許可してください。")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.orange.opacity(0.8))
+                        Spacer(minLength: 0)
+                        buttonChip("システム設定", emphasized: false) {
+                            overlayModel.openReminderPrivacySettings()
+                        }
+                    }
+                }
+
+                if let errorMessage = overlayModel.reminderErrorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.orange.opacity(0.8))
+                        .lineLimit(2)
+                }
+            }
+            .task {
+                if overlayModel.reminderAccessState == .authorized {
+                    overlayModel.reminderWidgetModel.refresh()
+                }
+            }
+        }
+    }
+
+    private func dashboardSlotSettings(_ slot: DashboardWidgetSlot) -> some View {
+        let selected = overlayModel.dashboardWidgetIdentity(for: slot)
+
+        return VStack(alignment: .leading, spacing: 9) {
+            Text(slot.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.48))
+
+            Menu {
+                ForEach(dashboardOptions(including: selected), id: \.storageToken) { identity in
+                    Button {
+                        overlayModel.selectDashboardWidget(identity, for: slot)
+                    } label: {
+                        Label(
+                            overlayModel.dashboardWidgetTitle(identity),
+                            systemImage: identity == selected ? "checkmark" : overlayModel.dashboardWidgetSymbol(identity)
+                        )
+                    }
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: overlayModel.dashboardWidgetSymbol(selected))
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(overlayModel.dashboardWidgetTitle(selected))
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    if !overlayModel.isDashboardWidgetAvailable(selected) {
+                        Text("Unavailable")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.orange.opacity(0.9))
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+                .foregroundStyle(.white.opacity(0.84))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                )
+            }
+            .menuStyle(.borderlessButton)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func dashboardOptions(including selected: DashboardWidgetIdentity) -> [DashboardWidgetIdentity] {
+        var options = overlayModel.availableDashboardWidgets
+        if !options.contains(selected) {
+            options.append(selected)
+        }
+        return options
+    }
+
+    private var menuBarSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader(
+                    title: "Menu Bar",
+                    subtitle: "メニューバーのアイコンを非表示にします。Bartenderのような動作です。いつでも戻せます。"
+                )
+
+                settingsToggleButton(
+                    title: "メニューバーアイコンを隠す",
+                    subtitle: "Accessibility権限が必要です。オフにすると全アイコンが即座に復元されます。",
+                    isOn: menuBarManagerActive
+                ) {
+                    toggleMenuBarManagement()
+                }
+
+                if menuBarManagerActive {
+                    Text("\(menuBarHiddenItemCount) 個のアイコンを非表示にしています")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+
+                if !menuBarAccessibilityChecked {
+                    Text("システム設定 → プライバシーとセキュリティ → アクセシビリティでPull Notchを許可してください")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     private func compactWidgetGroup(zone: CompactWidgetZone) -> some View {
         let items = overlayModel.widgetLayoutItems(for: zone)
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: zoneIcon(zone))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(zoneAccent(zone))
+                    .frame(width: 25, height: 25)
+
                 Text(zone.title)
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.white)
@@ -986,10 +1305,6 @@ struct SettingsWindowView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.44))
             }
-
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
 
             VStack(spacing: 0) {
                 if items.isEmpty {
@@ -1006,8 +1321,14 @@ struct SettingsWindowView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 8)
+        .overlay(alignment: .trailing) {
+            if zone != .hidden {
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 1)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
@@ -1157,7 +1478,12 @@ struct SettingsWindowView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: settingSymbol(for: title))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isOn ? Color(red: 0.64, green: 0.8, blue: 1) : .white.opacity(0.38))
+                    .frame(width: 32, height: 32)
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
@@ -1165,26 +1491,30 @@ struct SettingsWindowView: View {
 
                     Text(subtitle)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.gray)
+                        .foregroundStyle(.white.opacity(0.4))
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 0)
 
                 Capsule()
-                    .fill(isOn ? Color.white : Color.white.opacity(0.14))
-                    .frame(width: 40, height: 24)
+                    .fill(isOn ? Color(red: 0.38, green: 0.66, blue: 1) : Color.white.opacity(0.11))
+                    .frame(width: 42, height: 24)
                     .overlay(alignment: isOn ? .trailing : .leading) {
                         Circle()
-                            .fill(isOn ? Color.black : Color.white.opacity(0.82))
-                            .frame(width: 16, height: 16)
-                            .padding(4)
+                            .fill(.white)
+                            .frame(width: 18, height: 18)
+                            .padding(3)
+                            .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
                     }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color.white.opacity(isOn ? 0.045 : 0.025))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 2)
+            .padding(.vertical, 9)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.055))
+                    .frame(height: 1)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -1215,6 +1545,46 @@ struct SettingsWindowView: View {
         }
     }
 
+    private func pageDescription(for tab: SettingsTab) -> String {
+        switch tab {
+        case .general:
+            return "Core behavior, files, startup and menu bar controls"
+        case .widgets:
+            return "Build your compact notch and expanded dashboard"
+        case .weather:
+            return "Location source and forecast refresh settings"
+        case .plugins:
+            return "Manage installed extensions and their settings"
+        }
+    }
+
+    private func settingSymbol(for title: String) -> String {
+        switch title {
+        case "Launch At Login": return "power"
+        case "アートワークを表示": return "photo.fill"
+        case "ビジュアライザーを表示": return "waveform"
+        case "ビジュアライザーを動かす": return "waveform.badge.magnifyingglass"
+        case "歌詞Toastを表示": return "quote.bubble.fill"
+        case "メニューバーアイコンを隠す": return "menubar.arrow.up.rectangle"
+        case "Enabled": return "power.circle.fill"
+        default:
+            if let feature = OverlayFeature.allCases.first(where: { $0.title == title }) {
+                switch feature {
+                case .nowPlaying: return "music.note"
+                case .pinnedFile: return "pin.fill"
+                case .battery: return "battery.100percent"
+                case .weather: return "cloud.sun.fill"
+                case .pomodoro: return "timer"
+                case .reminders: return "checklist"
+                case .systemStatus: return "gauge.with.dots.needle.50percent"
+                case .volumeOverlay: return "speaker.wave.2.fill"
+                case .hoverTitle: return "text.bubble.fill"
+                }
+            }
+            return "slider.horizontal.3"
+        }
+    }
+
     private var pluginsSection: some View {
         settingsCard {
             VStack(alignment: .leading, spacing: 14) {
@@ -1238,28 +1608,15 @@ struct SettingsWindowView: View {
                             .foregroundStyle(.white.opacity(0.45))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color.white.opacity(0.04))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                            )
-                    )
+                    .padding(.vertical, 18)
                 } else {
                     ForEach(overlayModel.pluginRuntimeInfos) { plugin in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 12) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(plugin.state == .loaded ? Color.green.opacity(0.14) : Color.white.opacity(0.07))
-                                        .frame(width: 38, height: 38)
-
-                                    Image(systemName: "puzzlepiece.extension.fill")
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(plugin.state == .loaded ? Color.green.opacity(0.9) : .white.opacity(0.52))
-                                }
+                                Image(systemName: "puzzlepiece.extension.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(plugin.state == .loaded ? Color.green.opacity(0.9) : .white.opacity(0.52))
+                                    .frame(width: 38, height: 38)
 
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(plugin.displayName)
@@ -1316,26 +1673,15 @@ struct SettingsWindowView: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.05))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .stroke(Color.white.opacity(0.05), lineWidth: 1)
-                                        )
-                                )
+                                .overlay(alignment: .bottom) {
+                                    Rectangle().fill(Color.white.opacity(0.055)).frame(height: 1)
+                                }
                             }
                         }
-                        .padding(.horizontal, 12)
                         .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white.opacity(0.055))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(Color.white.opacity(plugin.state == .loaded ? 0.12 : 0.06), lineWidth: 1)
-                                )
-                        )
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                        }
                     }
                 }
             }
@@ -1344,229 +1690,246 @@ struct SettingsWindowView: View {
 
     private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
-            .padding(18)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.055), Color.white.opacity(0.024)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.white.opacity(0.055), lineWidth: 1)
-                    )
-            )
+            .padding(.vertical, 10)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.075))
+                    .frame(height: 1)
+            }
     }
 
     private func sectionHeader(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white)
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: sectionSymbol(for: title))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color(red: 0.62, green: 0.78, blue: 1))
+                .frame(width: 31, height: 31)
 
-            Text(subtitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.48))
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text(subtitle)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.43))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func sectionSymbol(for title: String) -> String {
+        switch title {
+        case "Features": return "switch.2"
+        case "Pinned File Shelf": return "pin.square.fill"
+        case "Menu Bar": return "menubar.rectangle"
+        case "Weather Location": return "location.fill"
+        case "Now Playing": return "music.note.house.fill"
+        case "Toast": return "rectangle.and.text.magnifyingglass"
+        case "Expanded Widget Board": return "rectangle.split.2x1.fill"
+        case "Today Tasks": return "checklist"
+        case "Compact Widgets": return "capsule.fill"
+        case "Plugins": return "puzzlepiece.extension.fill"
+        case "Visualizer Source": return "waveform.path"
+        default: return "slider.horizontal.3"
         }
     }
 
     private func buttonChip(_ title: String, emphasized: Bool, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(.plain)
-            .foregroundStyle(emphasized ? .black : .white.opacity(0.82))
+            .foregroundStyle(.white.opacity(emphasized ? 0.96 : 0.76))
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 Capsule(style: .continuous)
-                    .fill(emphasized ? Color.white : Color.white.opacity(0.08))
+                    .fill(emphasized ? Color(red: 0.36, green: 0.64, blue: 1) : Color.white.opacity(0.07))
                     .overlay(
                         Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(emphasized ? 0 : 0.08), lineWidth: 1)
+                            .stroke(Color.white.opacity(emphasized ? 0.08 : 0.08), lineWidth: 1)
                     )
             )
     }
 }
 
 @Observable
-// TODO: NotchOverlayModel has grown to ~3000 lines. Consider splitting into
-// focused modules (e.g. NowPlayingModel, PomodoroModel, PluginHostModel,
-// WidgetLayoutManager) to improve maintainability and testability.
+// Coordinates focused state models while preserving the API consumed by the
+// app delegate, settings UI, content view, monitors, and plugin bridge.
 final class NotchOverlayModel {
     static let layoutDidChangeNotification = Notification.Name("NotchOverlayModel.layoutDidChange")
-    private static let hasShownOnboardingKey = "PullNotch.hasShownOnboarding"
-    private static let featureKeyPrefix = "PullNotch.feature."
-    private static let manualWeatherLocationKey = "PullNotch.weather.manualLocation"
-    private static let nowPlayingArtworkVisibleKey = "PullNotch.nowPlaying.artworkVisible"
-    private static let nowPlayingVisualizerVisibleKey = "PullNotch.nowPlaying.visualizerVisible"
-    private static let nowPlayingVisualizerAnimatedKey = "PullNotch.nowPlaying.visualizerAnimated"
-    private static let nowPlayingVisualizerModeKey = "PullNotch.nowPlaying.visualizerMode"
-    private static let toastLyricsVisibleKey = "PullNotch.toast.lyricsVisible"
-    private static let compactWidgetPriorityPrefix = "PullNotch.compactWidgetPriority."
-    private static let compactWidgetLayoutPrefix = "PullNotch.compactWidgetLayout."
-    private static let pinnedFileBookmarkKey = "PullNotch.pinnedFileBookmark"
 
-    let compactWidth: CGFloat = 290
-    let compactEmptyWidth: CGFloat = 244
-    let notchHeight: CGFloat = 52
-    let externalCompactHeight: CGFloat = 26
-    let externalCompactWidth: CGFloat = 520
-    let expandedHeight: CGFloat = 88
-    let volumeExpandedHeight: CGFloat = 112
-    let playerExpandedHeight: CGFloat = 286
-    let widgetExpandedHeight: CGFloat = 252
-    let onboardingExpandedHeight: CGFloat = 176
-    let windowHorizontalInset: CGFloat = 20
-    let windowTopInset: CGFloat = 2
-    let windowBottomInset: CGFloat = 14
+    private let lyricsModel = LyricsModel(loader: LyricsService())
+    private let nowPlayingModel = NowPlayingModel()
+    private let pomodoroModel = PomodoroModel()
+    private let widgetLayoutStore = WidgetLayoutStore()
+    private let dashboardWidgetLayoutStore = DashboardWidgetLayoutStore()
+    let calendarWidgetModel = CalendarWidgetModel()
+    let reminderWidgetModel = ReminderWidgetModel()
+    let systemStatusModel = SystemStatusModel()
+    private let pluginHostStore = PluginHostStore()
+    private let preferencesStore = OverlayPreferencesStore()
+    private let pinnedFileShelfStore = PinnedFileShelfStore()
+    private let artworkPaletteExtractor = ArtworkPaletteExtractor()
+    private let volumeOverlayModel = VolumeOverlayModel()
+    private let temporaryWidgetStore = TemporaryWidgetStore()
+    private let transientPresentationModel = TransientPresentationModel()
+    private let batteryModel = BatteryModel()
+    private let expandedPageNavigationModel = ExpandedPageNavigationModel()
+    private let compactWidgetFactory = CompactWidgetFactory()
+    private let expandedPageCatalog = ExpandedPageCatalog()
+    private let notchLayoutModel = NotchLayoutModel()
+    private let launchAtLoginModel = LaunchAtLoginModel()
 
-    private var collapseTask: Task<Void, Never>?
-    private var volumeHideTask: Task<Void, Never>?
-    private var volumeOverlayVisibleUntil: Date?
-    private var pomodoroTimerTask: Task<Void, Never>?
-    private var temporaryWidgetTasks: [CompactWidgetPlacement: Task<Void, Never>] = [:]
-    private var lyricsTask: Task<Void, Never>?
-    private var pluginStatusTask: Task<Void, Never>?
-    private var hoverHideTask: Task<Void, Never>?
-    private let lyricsService = LyricsService()
-
-    private(set) var currentPresentation: IslandPresentation?
-    private(set) var detailLine: String?
-    private(set) var isPlaying = false
-    private(set) var nowPlayingDurationSeconds: TimeInterval?
-    private(set) var nowPlayingPlaybackPositionSeconds: TimeInterval = 0
-    private(set) var nowPlayingPlaybackPositionUpdatedAt: Date?
-    private(set) var showsTrackChange = false
-    private(set) var showsTrackText = false
-    private(set) var showsHoverChange = false
-    private(set) var showsHoverText = false
-    private(set) var showsVolumeChange = false
-    private(set) var volumeLevel: Double = 0
-    private(set) var volumeOutputDeviceName: String?
-    private(set) var sourceApp: String?
-    private(set) var albumName: String?
-    private(set) var artworkData: Data?
     private(set) var visualizerBrightColor: Color = .white.opacity(0.92)
     private(set) var visualizerDarkColor: Color = .white.opacity(0.6)
-    private(set) var syncedLyrics: [SyncedLyricLine] = []
-    private(set) var plainLyricsText: String?
-    private(set) var lyricsLoadState: LyricsLoadState = .idle
-    private(set) var lyricsProvider: LyricsProvider?
-    private(set) var currentLyricsRequestKey: String?
     private(set) var compactWidgets: [CompactIslandWidget] = []
-    private(set) var temporaryCompactWidgets: [CompactWidgetPlacement: CompactIslandWidget] = [:]
-    private(set) var pluginWidgets: [PluginWidgetDescriptor] = []
-    private(set) var pluginExpandedPageDescriptors: [PluginExpandedPageDescriptor] = []
-    private(set) var pluginRuntimeInfos: [PluginRuntimeInfo] = []
-    private(set) var pluginSettingsSections: [PluginSettingsSectionDescriptor] = []
-    private(set) var batteryLevel: Int?
-    private(set) var batteryIsCharging = false
-    private(set) var chargingPowerWatts: Double?
     private(set) var weatherTemperatureText: String?
     private(set) var weatherSymbolName: String?
-    private(set) var manualWeatherLocation: String?
+    private(set) var weatherForecast: [WeatherForecastDay] = []
     private(set) var weatherLocationStatusMessage: String?
     private(set) var weatherLocationStatusColor: Color = .white.opacity(0.55)
-    private(set) var pinnedFileURL: URL?
-    private(set) var pomodoroPhase: PomodoroPhase = .focus
-    private(set) var pomodoroRemainingSeconds = PomodoroPhase.focus.duration
-    private(set) var pomodoroIsRunning = false
-    private(set) var nowPlayingShowsArtwork = true
-    private(set) var nowPlayingShowsVisualizer = true
-    private(set) var nowPlayingAnimatesVisualizer = true
-    private(set) var nowPlayingVisualizerMode: NowPlayingVisualizerMode = .fake
-    private(set) var toastShowsLyrics = false
-    private(set) var toastLyricsDismissed = false
     private(set) var liveVisualizerHeights: [CGFloat] = Array(repeating: 5, count: 6)
     private(set) var realVisualizerIsAvailable = false
-    private(set) var launchAtLoginEnabled = false
-    private(set) var launchAtLoginStatusText = "ログイン時には起動しません。"
-    private(set) var compactWidgetLayout = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
-    private(set) var pluginStatusMessage: String?
-    private(set) var showsPluginStatus = false
-    private(set) var currentExpandedPageID: String?
-    private(set) var expandedPageNavigationDirection: ExpandedPageNavigationDirection = .forward
+    private(set) var pinnedFileStatusMessage: String?
     private(set) var expandedPanel: ExpandedIslandPanel?
     private(set) var displayMode: NotchOverlayDisplayMode = .macDisplay
-    private(set) var featureStates: [OverlayFeature: Bool] = [:]
-    private var pluginEventHandlers: [UUID: @MainActor (PluginHostEvent) -> Void] = [:]
     private weak var pluginManager: PluginManager?
+    @ObservationIgnored private var pinnedFileStatusTask: Task<Void, Never>?
     var mediaControlHandler: ((MediaControlCommand) -> Void)?
     var settingsWindowHandler: (() -> Void)?
     var weatherLocationUpdateHandler: ((String?) -> Void)?
     var sharePinnedFileHandler: ((URL) -> Void)?
+    var quickLookPinnedFileHandler: ((URL) -> Void)?
+    var choosePinnedFilesHandler: (() -> Void)?
     var refreshWeatherHandler: (() -> Void)?
     var visualizerModeChangeHandler: ((NowPlayingVisualizerMode) -> Void)?
 
     init() {
-        featureStates = Dictionary(
-            uniqueKeysWithValues: OverlayFeature.allCases.map { feature in
-                let key = Self.featureKeyPrefix + feature.rawValue
-                let storedValue = UserDefaults.standard.object(forKey: key) as? Bool
-                return (feature, storedValue ?? true)
-            }
-        )
-        manualWeatherLocation = UserDefaults.standard.string(forKey: Self.manualWeatherLocationKey)
-        nowPlayingShowsArtwork = UserDefaults.standard.object(forKey: Self.nowPlayingArtworkVisibleKey) as? Bool ?? true
-        nowPlayingShowsVisualizer = UserDefaults.standard.object(forKey: Self.nowPlayingVisualizerVisibleKey) as? Bool ?? true
-        nowPlayingAnimatesVisualizer = UserDefaults.standard.object(forKey: Self.nowPlayingVisualizerAnimatedKey) as? Bool ?? true
-        toastShowsLyrics = UserDefaults.standard.object(forKey: Self.toastLyricsVisibleKey) as? Bool ?? false
-        if let storedMode = UserDefaults.standard.string(forKey: Self.nowPlayingVisualizerModeKey),
-           let visualizerMode = NowPlayingVisualizerMode(rawValue: storedMode) {
-            nowPlayingVisualizerMode = visualizerMode
+        lyricsModel.onUpdate = { [weak self] in
+            self?.notifyLayoutChange()
         }
-        compactWidgetLayout = normalizedCompactWidgetLayout(Self.loadCompactWidgetLayout())
-        pinnedFileURL = Self.restorePinnedFileURL()
-        pomodoroRemainingSeconds = pomodoroPhase.duration
-        refreshLaunchAtLoginStatus()
+        pluginHostStore.onChange = { [weak self] change in
+            self?.handlePluginHostChange(change)
+        }
+        volumeOverlayModel.onUpdate = { [weak self] in
+            self?.handleVolumeOverlayUpdate()
+        }
+        temporaryWidgetStore.onUpdate = { [weak self] in
+            self?.handleTemporaryWidgetUpdate()
+        }
+        transientPresentationModel.onUpdate = { [weak self] in
+            self?.notifyLayoutChange()
+        }
+        pomodoroModel.onUpdate = { [weak self] in
+            self?.handlePomodoroUpdate()
+        }
+        pomodoroModel.onPhaseTransition = { [weak self] in
+            self?.perform(.alignment)
+            self?.playPomodoroTransitionSound()
+        }
+        reminderWidgetModel.onUpdate = { [weak self] in
+            self?.refreshCompactWidgets()
+            self?.notifyLayoutChange()
+        }
+        systemStatusModel.onUpdate = { [weak self] in
+            self?.refreshCompactWidgets()
+            self?.notifyLayoutChange()
+        }
+        if isFeatureEnabled(.systemStatus) {
+            systemStatusModel.start()
+        }
+        launchAtLoginModel.refresh()
     }
 
+    var pomodoroPhase: PomodoroPhase { pomodoroModel.phase }
+    var pomodoroRemainingSeconds: Int { pomodoroModel.remainingSeconds }
+    var pomodoroIsRunning: Bool { pomodoroModel.isRunning }
+    var compactWidgetLayout: CompactWidgetLayout { widgetLayoutStore.layout }
+    var dashboardWidgetLayout: DashboardWidgetLayout { dashboardWidgetLayoutStore.layout }
+    var syncedLyrics: [SyncedLyricLine] { lyricsModel.syncedLyrics }
+    var plainLyricsText: String? { lyricsModel.plainLyricsText }
+    var lyricsLoadState: LyricsLoadState { lyricsModel.loadState }
+    var lyricsProvider: LyricsProvider? { lyricsModel.provider }
+    var pluginWidgets: [PluginWidgetDescriptor] { pluginHostStore.widgets }
+    var pluginExpandedPageDescriptors: [PluginExpandedPageDescriptor] { pluginHostStore.expandedPages }
+    var pluginDashboardWidgets: [PluginDashboardWidgetDescriptor] { pluginHostStore.dashboardWidgets }
+    var pluginRuntimeInfos: [PluginRuntimeInfo] { pluginHostStore.runtimeInfos }
+    var pluginSettingsSections: [PluginSettingsSectionDescriptor] { pluginHostStore.settingsSections }
+    var manualWeatherLocation: String? { preferencesStore.manualWeatherLocation }
+    var pinnedFiles: [PinnedFileItem] { pinnedFileShelfStore.items }
+    var selectedPinnedFileID: UUID? { pinnedFileShelfStore.selectedID }
+    var selectedPinnedFile: PinnedFileItem? { pinnedFileShelfStore.selectedItem }
+    var pinnedFileURL: URL? { selectedPinnedFile?.url }
+    var maximumPinnedFileCount: Int { PinnedFileShelfStore.maximumItemCount }
+    var nowPlayingShowsArtwork: Bool { preferencesStore.nowPlayingShowsArtwork }
+    var nowPlayingShowsVisualizer: Bool { preferencesStore.nowPlayingShowsVisualizer }
+    var nowPlayingAnimatesVisualizer: Bool { preferencesStore.nowPlayingAnimatesVisualizer }
+    var nowPlayingVisualizerMode: NowPlayingVisualizerMode { preferencesStore.nowPlayingVisualizerMode }
+    var toastShowsLyrics: Bool { preferencesStore.toastShowsLyrics }
+    var currentPresentation: IslandPresentation? { nowPlayingModel.currentPresentation }
+    var detailLine: String? { nowPlayingModel.detailLine }
+    var isPlaying: Bool { nowPlayingModel.isPlaying }
+    var nowPlayingDurationSeconds: TimeInterval? { nowPlayingModel.durationSeconds }
+    var nowPlayingPlaybackPositionSeconds: TimeInterval { nowPlayingModel.playbackPositionSeconds }
+    var nowPlayingPlaybackPositionUpdatedAt: Date? { nowPlayingModel.playbackPositionUpdatedAt }
+    var sourceApp: String? { nowPlayingModel.sourceApp }
+    var albumName: String? { nowPlayingModel.albumName }
+    var artworkData: Data? { nowPlayingModel.artworkData }
+    var nowPlayingTitle: String? { nowPlayingModel.title }
+    var nowPlayingArtist: String? { nowPlayingModel.artist }
+    var showsVolumeChange: Bool { volumeOverlayModel.isVisible }
+    var volumeLevel: Double { volumeOverlayModel.level }
+    var volumeOutputDeviceName: String? { volumeOverlayModel.outputDeviceName }
+    var temporaryCompactWidgets: [CompactWidgetPlacement: CompactIslandWidget] { temporaryWidgetStore.widgets }
+    var showsTrackChange: Bool { transientPresentationModel.showsTrackChange }
+    var showsTrackText: Bool { transientPresentationModel.showsTrackText }
+    var showsHoverChange: Bool { transientPresentationModel.showsHoverChange }
+    var showsHoverText: Bool { transientPresentationModel.showsHoverText }
+    var toastLyricsDismissed: Bool { transientPresentationModel.toastLyricsDismissed }
+    var pluginStatusMessage: String? { transientPresentationModel.pluginStatusMessage }
+    var showsPluginStatus: Bool { transientPresentationModel.showsPluginStatus }
+    var batteryLevel: Int? { batteryModel.level }
+    var batterySymbolName: String { batteryModel.symbolName ?? "battery.0percent" }
+    var batteryIsCharging: Bool { batteryModel.isCharging }
+    var chargingPowerWatts: Double? { batteryModel.chargingWatts }
+    var accessoryBatteryDevices: [AccessoryBatteryDevice] { batteryModel.accessoryDevices }
+    var currentExpandedPageID: String? { expandedPageNavigationModel.currentPageID }
+    var expandedPageNavigationDirection: ExpandedPageNavigationDirection { expandedPageNavigationModel.direction }
+    var externalCompactHeight: CGFloat { notchLayoutModel.configuration.externalCompactHeight }
+    var launchAtLoginEnabled: Bool { launchAtLoginModel.isEnabled }
+    var launchAtLoginStatusText: String { launchAtLoginModel.statusText }
+    var reminderAccessState: ReminderAccessState { reminderWidgetModel.accessState }
+    var reminderLists: [ReminderListItem] { reminderWidgetModel.lists }
+    var todayReminderItems: [ReminderWidgetItem] { reminderWidgetModel.items }
+    var reminderErrorMessage: String? { reminderWidgetModel.errorMessage }
+    var systemStatusSnapshot: SystemStatusSnapshot { systemStatusModel.snapshot }
+
     var compactVisibleWidth: CGFloat {
-        let calculatedWidth = leadingWidgetWidth + trailingWidgetWidth + compactCenterSpacing + 36
-        return max(compactEmptyWidth, calculatedWidth)
+        compactLayoutMetrics.visibleWidth
     }
 
     var visibleWidth: CGFloat {
-        if usesExternalCompactLayout {
-            return max(compactVisibleWidth, externalCompactWidth)
-        }
-        if expandedPanel == .musicPlayer {
-            return max(compactVisibleWidth, expandedPagePreferredWidth)
-        }
-        return compactVisibleWidth
+        notchLayoutSnapshot.visibleWidth
     }
 
     var panelContentWidth: CGFloat {
-        var width = compactVisibleWidth
-
-        if displayMode == .externalDisplay {
-            width = max(width, externalCompactWidth)
-        }
-
-        if !expandedWidgetPages.isEmpty {
-            width = max(width, expandedMaxPreferredWidth)
-        }
-
-        return width
+        notchLayoutSnapshot.panelContentWidth
     }
 
     var usesExternalCompactLayout: Bool {
-        displayMode == .externalDisplay && expandedPanel == nil
+        notchLayoutSnapshot.usesExternalCompactLayout
     }
 
     var compactBarHeight: CGFloat {
-        usesExternalCompactLayout ? externalCompactHeight : notchHeight
+        notchLayoutSnapshot.compactBarHeight
     }
 
     var effectiveWindowTopInset: CGFloat {
-        usesExternalCompactLayout ? 0 : windowTopInset
+        notchLayoutSnapshot.effectiveWindowTopInset
     }
 
     var effectiveWindowBottomInset: CGFloat {
-        usesExternalCompactLayout ? 0 : windowBottomInset
+        notchLayoutSnapshot.effectiveWindowBottomInset
     }
 
     var showsToastLyrics: Bool {
@@ -1582,27 +1945,7 @@ final class NotchOverlayModel {
     }
 
     var compactCenterSpacing: CGFloat {
-        // IMPORTANT: When adding a new CompactWidgetStyle case, add a matching
-        // spacing entry here. The `default` branch is a safe fallback but may
-        // not produce the ideal visual layout for new widget combinations.
-        switch (leadingWidget?.style, trailingWidget?.style) {
-        case (.artwork?, .visualizer?):
-            return 200
-        case (.labeledSymbol?, .labeledSymbol?):
-            return 240
-        case (.labeledSymbol?, .circularProgress?), (.circularProgress?, .labeledSymbol?):
-            return 232
-        case (.circularProgress?, .circularProgress?):
-            return 224
-        case (.labeledSymbol?, _), (_, .labeledSymbol?):
-            return 216
-        case (.circularProgress?, _), (_, .circularProgress?):
-            return 224
-        case (.some, .some):
-            return 192
-        default:
-            return 200
-        }
+        compactLayoutMetrics.centerSpacing
     }
 
     var leadingWidget: CompactIslandWidget? {
@@ -1622,317 +1965,90 @@ final class NotchOverlayModel {
     }
 
     var currentIslandHeight: CGFloat {
-        if usesExternalCompactLayout {
-            return externalCompactHeight
-        }
-        if expandedPanel == .onboarding {
-            return onboardingExpandedHeight
-        }
-        if expandedPanel == .musicPlayer {
-            return activeExpandedBuiltInPage == .nowPlaying ? playerExpandedHeight : widgetExpandedHeight
-        }
-        if showsBatteryLowWarning {
-            return expandedHeight
-        }
-        if showsVolumeChange {
-            return volumeExpandedHeight
-        }
-        if showsPluginStatus {
-            return expandedHeight
-        }
-        if showsHoverChange {
-            return expandedHeight
-        }
-        return (showsTrackChange || showsToastLyrics) ? expandedHeight : notchHeight
+        notchLayoutSnapshot.currentIslandHeight
     }
 
     var panelSize: CGSize {
-        CGSize(
-            width: visibleWidth + (windowHorizontalInset * 2),
-            height: currentIslandHeight + effectiveWindowTopInset + effectiveWindowBottomInset
-        )
+        notchLayoutSnapshot.panelSize
     }
 
     var expandedWidgetPages: [ExpandedPageDescriptor] {
-        var pages: [ExpandedPageDescriptor] = []
-
-        if currentPresentation != nil {
-            pages.append(
-                ExpandedPageDescriptor(
-                    id: ExpandedWidgetPageKind.nowPlaying.id,
-                    title: ExpandedWidgetPageKind.nowPlaying.title,
-                    source: .builtIn(.nowPlaying),
-                    preferredWidth: nil,
-                    render: nil
-                )
-            )
-        }
-
-        if pinnedFileURL != nil, isFeatureEnabled(.pinnedFile) {
-            pages.append(
-                ExpandedPageDescriptor(
-                    id: ExpandedWidgetPageKind.pinnedFile.id,
-                    title: ExpandedWidgetPageKind.pinnedFile.title,
-                    source: .builtIn(.pinnedFile),
-                    preferredWidth: nil,
-                    render: nil
-                )
-            )
-        }
-
-        if weatherTemperatureText != nil, isFeatureEnabled(.weather) {
-            pages.append(
-                ExpandedPageDescriptor(
-                    id: ExpandedWidgetPageKind.weather.id,
-                    title: ExpandedWidgetPageKind.weather.title,
-                    source: .builtIn(.weather),
-                    preferredWidth: nil,
-                    render: nil
-                )
-            )
-        }
-
-        if isFeatureEnabled(.pomodoro) {
-            pages.append(
-                ExpandedPageDescriptor(
-                    id: ExpandedWidgetPageKind.pomodoro.id,
-                    title: ExpandedWidgetPageKind.pomodoro.title,
-                    source: .builtIn(.pomodoro),
-                    preferredWidth: nil,
-                    render: nil
-                )
-            )
-        }
-
-        pages.append(contentsOf: pluginExpandedPageDescriptors.map {
-            ExpandedPageDescriptor(
-                id: "plugin:\($0.id)",
-                title: $0.title,
-                source: .plugin($0.id),
-                preferredWidth: $0.preferredWidth,
-                render: $0.render
-            )
-        })
-
-        return pages
+        expandedPageCatalog.pages(
+            state: expandedPageCatalogState,
+            pluginPages: pluginExpandedPageDescriptors
+        )
     }
 
     var activeExpandedWidgetPage: ExpandedPageDescriptor? {
-        let pages = expandedWidgetPages
-        guard !pages.isEmpty else { return nil }
-        if let currentExpandedPageID, let currentPage = pages.first(where: { $0.id == currentExpandedPageID }) {
-            return currentPage
-        }
-        return pages.first
+        expandedPageCatalog.activePage(
+            currentPageID: currentExpandedPageID,
+            in: expandedWidgetPages
+        )
     }
 
     var activeExpandedBuiltInPage: ExpandedWidgetPageKind? {
-        guard let activeExpandedWidgetPage else { return nil }
-        if case .builtIn(let page) = activeExpandedWidgetPage.source {
-            return page
-        }
-        return nil
+        expandedPageCatalog.activeBuiltInPage(
+            currentPageID: currentExpandedPageID,
+            in: expandedWidgetPages
+        )
     }
 
-    var expandedPagePreferredWidth: CGFloat {
-        guard let activeExpandedWidgetPage else { return compactVisibleWidth }
-        return preferredWidth(for: activeExpandedWidgetPage)
-    }
-
-    var expandedMaxPreferredWidth: CGFloat {
-        expandedWidgetPages
-            .map(preferredWidth(for:))
-            .reduce(compactVisibleWidth, max)
-    }
-
-    private func preferredWidth(for page: ExpandedPageDescriptor) -> CGFloat {
-        switch page.source {
-        case .plugin:
-            return page.preferredWidth ?? compactVisibleWidth
-        case .builtIn(let builtInPage):
-            return preferredWidth(for: builtInPage)
-        }
-    }
-
-    private func preferredWidth(for page: ExpandedWidgetPageKind) -> CGFloat {
-        switch page {
-        case .nowPlaying:
-            let titleWidth = textWidth(
-                detailLine?.components(separatedBy: " - ").first ?? "Not Playing",
-                font: .systemFont(ofSize: 14, weight: .semibold)
-            )
-            let subtitleWidth = textWidth(
-                detailLine?.components(separatedBy: " - ").dropFirst().joined(separator: " - ") ?? "No artist",
-                font: .systemFont(ofSize: 12, weight: .medium)
-            )
-            let sourceWidth = textWidth(
-                sourceApp ?? "Music",
-                font: .systemFont(ofSize: 11, weight: .medium)
-            )
-            let textColumnWidth = max(titleWidth, subtitleWidth, sourceWidth, 180)
-            return min(560, max(420, 64 + 14 + textColumnWidth + 48))
-        case .pinnedFile:
-            let fileNameWidth = textWidth(
-                pinnedFileURL?.lastPathComponent ?? "No File",
-                font: .systemFont(ofSize: 14, weight: .semibold)
-            )
-            let pathWidth = textWidth(
-                pinnedFileURL?.deletingLastPathComponent().path ?? "ファイルがありません",
-                font: .systemFont(ofSize: 11, weight: .medium)
-            )
-            let buttonsWidth: CGFloat = 92 + 96 + 88
-            let contentWidth = max(fileNameWidth, pathWidth, buttonsWidth)
-            return min(720, max(520, 64 + 14 + contentWidth + 48))
-        case .weather:
-            let temperatureWidth = textWidth(
-                weatherTemperatureText ?? "--°",
-                font: .systemFont(ofSize: 28, weight: .bold)
-            )
-            let locationWidth = textWidth(
-                manualWeatherLocation ?? "Current Location",
-                font: .systemFont(ofSize: 12, weight: .medium)
-            )
-            return min(520, max(420, temperatureWidth + locationWidth + 180))
-        case .pomodoro:
-            let timerWidth = textWidth(
-                pomodoroTimeText,
-                font: .systemFont(ofSize: 28, weight: .bold)
-            )
-            let phaseWidth = textWidth(
-                pomodoroPhase.title,
-                font: .systemFont(ofSize: 12, weight: .medium)
-            )
-            return min(520, max(420, timerWidth + phaseWidth + 200))
-        }
+    private var expandedMaxPreferredWidth: CGFloat {
+        expandedPageCatalog.maximumPreferredWidth(
+            for: expandedWidgetPages,
+            state: expandedPageCatalogState
+        )
     }
 
     func estimatedPlaybackPosition(at date: Date = .now) -> TimeInterval {
-        let basePosition = max(0, nowPlayingPlaybackPositionSeconds)
-        guard
-            isPlaying,
-            let updatedAt = nowPlayingPlaybackPositionUpdatedAt
-        else {
-            return clampedPlaybackPosition(basePosition)
-        }
-
-        let advancedPosition = basePosition + max(0, date.timeIntervalSince(updatedAt))
-        return clampedPlaybackPosition(advancedPosition)
+        nowPlayingModel.estimatedPlaybackPosition(at: date)
     }
 
     func activeLyricLineIndex(at date: Date = .now) -> Int? {
-        guard !syncedLyrics.isEmpty else { return nil }
-
-        let playbackPosition = estimatedPlaybackPosition(at: date)
-        var currentIndex: Int?
-
-        for (index, line) in syncedLyrics.enumerated() where line.timestamp <= playbackPosition + 0.12 {
-            currentIndex = index
-        }
-
-        return currentIndex
+        lyricsModel.activeLineIndex(at: estimatedPlaybackPosition(at: date))
     }
 
     func visibleLyricsLines(at date: Date = .now) -> [(line: SyncedLyricLine, isActive: Bool, isContext: Bool)] {
-        guard !syncedLyrics.isEmpty else { return [] }
-
-        guard let activeIndex = activeLyricLineIndex(at: date) else {
-            return Array(syncedLyrics.prefix(2)).map { ($0, false, true) }
-        }
-
-        let lowerBound = activeIndex
-        let upperBound = min(syncedLyrics.count - 1, activeIndex + 1)
-
-        return Array(syncedLyrics[lowerBound...upperBound].enumerated()).map { offset, line in
-            let index = lowerBound + offset
-            return (line, index == activeIndex, index != activeIndex)
-        }
+        lyricsModel.visibleLines(at: estimatedPlaybackPosition(at: date))
     }
 
     var lyricsStatusText: String {
-        switch lyricsLoadState {
-        case .idle:
-            return "Lyrics"
-        case .loading:
-            return "Loading lyrics..."
-        case .unavailable:
-            return "Lyrics unavailable"
-        case .ready:
-            let providerName = lyricsProvider?.rawValue ?? "Lyrics"
-            return syncedLyrics.isEmpty ? "Plain lyrics via \(providerName)" : "Synced via \(providerName)"
-        }
+        lyricsModel.statusText
     }
 
     var lyricsFallbackPreviewText: String? {
-        guard
-            syncedLyrics.isEmpty,
-            let plainLyricsText
-        else {
-            return nil
-        }
-
-        return plainLyricsText
-            .split(whereSeparator: \.isNewline)
-            .prefix(2)
-            .map(String.init)
-            .joined(separator: "\n")
-            .nilIfEmpty
+        lyricsModel.fallbackPreviewText
     }
 
     func toastLyricsText(at date: Date = .now) -> String? {
-        if let activeIndex = activeLyricLineIndex(at: date) {
-            return syncedLyrics[activeIndex].text.nilIfEmpty
-        }
-
-        if let firstPlainLine = plainLyricsText?
-            .split(whereSeparator: \.isNewline)
-            .map(String.init)
-            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-            return firstPlainLine
-        }
-
-        switch lyricsLoadState {
-        case .idle:
-            return detailLine
-        case .loading:
-            return "Loading lyrics..."
-        case .unavailable:
-            return detailLine ?? "Lyrics unavailable"
-        case .ready:
-            return detailLine
-        }
+        lyricsModel.toastText(
+            at: estimatedPlaybackPosition(at: date),
+            fallbackDetail: detailLine
+        )
     }
 
     func updateNowPlaying(track: AppleMusicTrack) {
         guard isFeatureEnabled(.nowPlaying) else { return }
 
-        let lyricsRequestKey = normalizedLyricsRequestKey(for: track)
-        let shouldReloadLyrics = lyricsRequestKey != currentLyricsRequestKey
-        nowPlayingDurationSeconds = track.durationSeconds
-        nowPlayingPlaybackPositionSeconds = max(0, track.playbackPositionSeconds ?? 0)
-        nowPlayingPlaybackPositionUpdatedAt = .now
-        albumName = track.album.isEmpty ? nil : track.album
-
-        let presentation = IslandPresentation(
-            id: [track.title, track.artist, track.album].joined(separator: "||"),
-            detailLine: [track.title, track.artist].filter { !$0.isEmpty }.joined(separator: " - "),
-            sourceApp: track.bundleIdentifier,
-            artworkData: track.artworkData,
-            isPlaying: track.isPlaying
-        )
-
-        let shouldReveal = currentPresentation?.id != presentation.id
+        let shouldReveal = nowPlayingModel.update(track: track)
+        guard let presentation = nowPlayingModel.currentPresentation else { return }
+        updateVisualizerPalette(from: presentation.artworkData)
         refreshCompactWidgets()
-        present(
-            presentation,
+        finishPresentingNowPlaying(
             revealChange: shouldReveal,
             hapticFeedback: shouldReveal ? .generic : nil
         )
 
-        if shouldReloadLyrics {
-            loadLyrics(for: track, requestKey: lyricsRequestKey)
-        }
+        lyricsModel.update(
+            for: LyricsTrackMetadata(
+                trackName: track.title,
+                artistName: track.artist,
+                albumName: track.album,
+                durationSeconds: track.durationSeconds
+            )
+        )
 
-        broadcastPluginEvent(.nowPlaying(pluginNowPlayingSnapshot))
+        pluginHostStore.updateNowPlayingSnapshot(pluginNowPlayingSnapshot)
     }
 
     func present(
@@ -1940,13 +2056,19 @@ final class NotchOverlayModel {
         revealChange: Bool = true,
         hapticFeedback: IslandHapticFeedback? = nil
     ) {
-        currentPresentation = presentation
-        detailLine = presentation.detailLine
-        sourceApp = presentation.sourceApp
-        artworkData = presentation.artworkData
+        nowPlayingModel.present(presentation)
         updateVisualizerPalette(from: presentation.artworkData)
-        isPlaying = presentation.isPlaying
+        refreshCompactWidgets()
+        finishPresentingNowPlaying(
+            revealChange: revealChange,
+            hapticFeedback: hapticFeedback
+        )
+    }
 
+    private func finishPresentingNowPlaying(
+        revealChange: Bool,
+        hapticFeedback: IslandHapticFeedback?
+    ) {
         if revealChange {
             if let hapticFeedback {
                 perform(hapticFeedback)
@@ -1964,7 +2086,6 @@ final class NotchOverlayModel {
     }
 
     func showTrackChangeTemporarily() {
-        collapseTask?.cancel()
         guard expandedPanel == nil else {
             notifyLayoutChange()
             return
@@ -1973,82 +2094,33 @@ final class NotchOverlayModel {
             notifyLayoutChange()
             return
         }
-        showsPluginStatus = false
-        pluginStatusMessage = nil
-        showsHoverChange = false
-        showsHoverText = false
-        showsTrackChange = true
-        showsTrackText = true
-        notifyLayoutChange()
-
-        collapseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
-            self?.showsTrackText = false
-            self?.notifyLayoutChange()
-            try? await Task.sleep(for: .seconds(0.28))
-            guard !Task.isCancelled else { return }
-            self?.showsTrackChange = false
-            self?.notifyLayoutChange()
-        }
+        transientPresentationModel.showTrackChange()
     }
 
     @discardableResult
     func dismissToastIfVisible() -> Bool {
-        let hadVisibleToast = showsTrackChange || showsToastLyrics
-        guard hadVisibleToast else { return false }
-
-        collapseTask?.cancel()
-        showsTrackText = false
-        showsTrackChange = false
-
-        if toastShowsLyrics {
-            toastLyricsDismissed = true
-        }
-
-        notifyLayoutChange()
-        return true
+        transientPresentationModel.dismissToast(
+            lyricsToastIsVisible: showsToastLyrics,
+            toastLyricsEnabled: toastShowsLyrics
+        )
     }
 
     @discardableResult
     func handleToastSpaceKey() -> Bool {
-        if dismissToastIfVisible() {
-            return true
-        }
-
-        guard toastShowsLyrics, toastLyricsDismissed else { return false }
-        toastLyricsDismissed = false
-        notifyLayoutChange()
-        return true
+        transientPresentationModel.handleSpaceKey(
+            lyricsToastIsVisible: showsToastLyrics,
+            toastLyricsEnabled: toastShowsLyrics
+        )
     }
 
     func clearNowPlaying() {
-        collapseTask?.cancel()
-        lyricsTask?.cancel()
-        currentPresentation = nil
-        detailLine = nil
-        sourceApp = nil
-        albumName = nil
-        artworkData = nil
+        nowPlayingModel.clear()
         resetVisualizerPalette()
-        nowPlayingDurationSeconds = nil
-        nowPlayingPlaybackPositionSeconds = 0
-        nowPlayingPlaybackPositionUpdatedAt = nil
-        syncedLyrics = []
-        plainLyricsText = nil
-        lyricsLoadState = .idle
-        lyricsProvider = nil
-        currentLyricsRequestKey = nil
-        showsPluginStatus = false
-        pluginStatusMessage = nil
-        showsHoverChange = false
-        showsHoverText = false
-        isPlaying = false
-        showsTrackChange = false
-        showsTrackText = false
+        lyricsModel.reset()
+        transientPresentationModel.reset()
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
-        broadcastPluginEvent(.nowPlaying(nil))
+        pluginHostStore.updateNowPlayingSnapshot(nil)
         notifyLayoutChange()
     }
 
@@ -2056,24 +2128,20 @@ final class NotchOverlayModel {
         guard let sourceApp, sourceApp != "unknown" else { return }
         guard let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == sourceApp }) else { return }
         runningApp.unhide()
-        runningApp.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        runningApp.activate(options: [.activateAllWindows])
     }
 
     func toggleMusicPlayer() {
         guard expandedPanel != .onboarding else { return }
 
-        collapseTask?.cancel()
-
         if expandedPanel == .musicPlayer {
             expandedPanel = nil
         } else {
+            pinnedFileShelfStore.refresh()
             expandedPanel = .musicPlayer
             ensureExpandedWidgetPage()
             dismissVolumeOverlay()
-            showsPluginStatus = false
-            pluginStatusMessage = nil
-            showsTrackChange = false
-            showsTrackText = false
+            transientPresentationModel.hideTrackAndPluginStatus()
             perform(.generic)
         }
 
@@ -2083,37 +2151,28 @@ final class NotchOverlayModel {
     func dismissExpandedPanel() {
         guard expandedPanel != nil, expandedPanel != .onboarding else { return }
         expandedPanel = nil
-        showsPluginStatus = false
-        pluginStatusMessage = nil
-        showsHoverChange = false
-        showsHoverText = false
+        transientPresentationModel.hidePluginStatusAndHover()
         notifyLayoutChange()
     }
 
     func openSettingsWindow() {
         guard expandedPanel != .onboarding else { return }
-        collapseTask?.cancel()
         expandedPanel = nil
         dismissVolumeOverlay()
-        showsPluginStatus = false
-        pluginStatusMessage = nil
-        showsTrackChange = false
-        showsTrackText = false
-        showsHoverChange = false
-        showsHoverText = false
+        transientPresentationModel.reset()
         perform(.generic)
         settingsWindowHandler?()
         notifyLayoutChange()
     }
 
     func presentOnboardingIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: Self.hasShownOnboardingKey) else { return }
+        guard !preferencesStore.hasShownOnboarding else { return }
         expandedPanel = .onboarding
         notifyLayoutChange()
     }
 
     func completeOnboarding() {
-        UserDefaults.standard.set(true, forKey: Self.hasShownOnboardingKey)
+        preferencesStore.completeOnboarding()
         if expandedPanel == .onboarding {
             expandedPanel = nil
             refreshCompactWidgets()
@@ -2123,55 +2182,34 @@ final class NotchOverlayModel {
 
     func setHoverTitleVisible(_ isVisible: Bool) {
         guard isFeatureEnabled(.hoverTitle) else { return }
-        hoverHideTask?.cancel()
-        hoverHideTask = nil
-
-        guard expandedPanel == nil, !showsTrackChange, !showsVolumeChange, !showsPluginStatus, currentPresentation != nil else {
-            if !isVisible, showsHoverChange || showsHoverText {
-                showsHoverChange = false
-                showsHoverText = false
-                notifyLayoutChange()
-            }
-            return
-        }
-
-        if isVisible {
-            guard !showsHoverChange || !showsHoverText else { return }
-            showsHoverChange = true
-            showsHoverText = true
-            notifyLayoutChange()
-        } else {
-            hoverHideTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(140))
-                guard !Task.isCancelled, let self else { return }
-                guard self.showsHoverChange || self.showsHoverText else { return }
-                self.showsHoverChange = false
-                self.showsHoverText = false
-                self.notifyLayoutChange()
-            }
-        }
+        transientPresentationModel.setHoverVisible(
+            isVisible,
+            canShow: expandedPanel == nil
+                && !showsTrackChange
+                && !showsVolumeChange
+                && !showsPluginStatus
+                && currentPresentation != nil
+        )
     }
 
     func showVolume(level: Double, outputDeviceName: String?) {
         guard isFeatureEnabled(.volumeOverlay) else { return }
         guard expandedPanel == nil else { return }
 
-        showsTrackChange = false
-        showsTrackText = false
-        showsPluginStatus = false
-        pluginStatusMessage = nil
-        showsHoverChange = false
-        showsHoverText = false
-        showsVolumeChange = true
-        volumeLevel = max(0, min(1, level))
-        volumeOutputDeviceName = outputDeviceName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        transientPresentationModel.hideForVolume()
+        volumeOverlayModel.show(level: level, outputDeviceName: outputDeviceName)
         let currentLevel = volumeLevel
         let currentDevice = volumeOutputDeviceName
-        appLog.debug("VolumeOverlay: show level=\(String(format: "%.3f", currentLevel)) device=\(currentDevice ?? "unknown")")
-        broadcastPluginEvent(.volume(PluginVolumeSnapshot(level: currentLevel, outputDeviceName: currentDevice)))
-        notifyLayoutChange()
+        pluginHostStore.updateVolumeSnapshot(
+            PluginVolumeSnapshot(level: currentLevel, outputDeviceName: currentDevice)
+        )
+    }
 
-        extendVolumeOverlayVisibility(by: 2.6)
+    private func handleVolumeOverlayUpdate() {
+        pluginHostStore.synchronizeVolumeSnapshot(
+            PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)
+        )
+        notifyLayoutChange()
     }
 
     func send(_ command: MediaControlCommand) {
@@ -2182,25 +2220,21 @@ final class NotchOverlayModel {
     func updateBattery(
         level: Int?,
         isCharging: Bool,
-        chargingWatts: Double?,
-        previousStatus: (level: Int, isCharging: Bool, chargingWatts: Double?)?
+        chargingWatts: Double?
     ) {
-        let didChange = batteryLevel != level
-            || batteryIsCharging != isCharging
-            || chargingWattsChanged(from: chargingPowerWatts, to: chargingWatts)
+        let update = batteryModel.update(
+            level: level,
+            isCharging: isCharging,
+            chargingWatts: chargingWatts,
+            canShowChargingPower: expandedPanel == nil && isFeatureEnabled(.battery)
+        )
+        var needsWidgetRefresh = update.didChange
 
-        batteryLevel = level
-        batteryIsCharging = isCharging
-        chargingPowerWatts = chargingWatts
-
-        var needsWidgetRefresh = didChange
-
-        if isCharging,
-           let chargingWatts,
-           shouldShowChargingPowerIndicator(previousStatus: previousStatus, chargingWatts: chargingWatts) {
+        if update.shouldShowChargingPower {
             showChargingPowerIndicator()
             needsWidgetRefresh = true
-        } else if !isCharging, temporaryCompactWidgets[.trailing]?.identity == .builtIn(.chargingPower) {
+        } else if update.shouldClearChargingPower,
+                  temporaryCompactWidgets[.trailing]?.identity == .builtIn(.chargingPower) {
             clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.chargingPower))
             needsWidgetRefresh = true
         }
@@ -2210,43 +2244,33 @@ final class NotchOverlayModel {
         notifyLayoutChange()
     }
 
-    private func chargingWattsChanged(from oldValue: Double?, to newValue: Double?) -> Bool {
-        switch (oldValue, newValue) {
-        case (nil, nil):
-            return false
-        case let (oldValue?, newValue?):
-            return abs(oldValue - newValue) >= 0.1
-        default:
-            return true
-        }
+    func updateAccessoryBatteries(_ devices: [AccessoryBatteryDevice]) {
+        guard batteryModel.updateAccessoryDevices(devices) else { return }
+        refreshCompactWidgets()
+        notifyLayoutChange()
     }
 
-    func updateWeather(temperatureText: String?, symbolName: String?) {
+    func updateWeather(
+        temperatureText: String?,
+        symbolName: String?,
+        forecast: [WeatherForecastDay] = []
+    ) {
         weatherTemperatureText = temperatureText
         weatherSymbolName = symbolName
+        weatherForecast = forecast
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
-        broadcastPluginEvent(.weather(pluginWeatherSnapshot))
+        pluginHostStore.updateWeatherSnapshot(pluginWeatherSnapshot)
         notifyLayoutChange()
     }
 
     func setManualWeatherLocation(_ location: String?) {
-        let trimmedLocation = location?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfEmpty
-
-        manualWeatherLocation = trimmedLocation
+        let trimmedLocation = preferencesStore.setManualWeatherLocation(location)
         if let trimmedLocation {
             weatherLocationStatusMessage = "'\(trimmedLocation)' の天気を取得中..."
             weatherLocationStatusColor = .white.opacity(0.58)
         } else {
             weatherLocationStatusMessage = nil
-        }
-
-        if let trimmedLocation {
-            UserDefaults.standard.set(trimmedLocation, forKey: Self.manualWeatherLocationKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.manualWeatherLocationKey)
         }
 
         weatherLocationUpdateHandler?(trimmedLocation)
@@ -2260,30 +2284,26 @@ final class NotchOverlayModel {
     }
 
     func setNowPlayingArtworkVisible(_ isVisible: Bool) {
-        nowPlayingShowsArtwork = isVisible
-        UserDefaults.standard.set(isVisible, forKey: Self.nowPlayingArtworkVisibleKey)
+        preferencesStore.setNowPlayingArtworkVisible(isVisible)
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func setNowPlayingVisualizerVisible(_ isVisible: Bool) {
-        nowPlayingShowsVisualizer = isVisible
-        UserDefaults.standard.set(isVisible, forKey: Self.nowPlayingVisualizerVisibleKey)
+        preferencesStore.setNowPlayingVisualizerVisible(isVisible)
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func setNowPlayingVisualizerAnimated(_ isAnimated: Bool) {
-        nowPlayingAnimatesVisualizer = isAnimated
-        UserDefaults.standard.set(isAnimated, forKey: Self.nowPlayingVisualizerAnimatedKey)
+        preferencesStore.setNowPlayingVisualizerAnimated(isAnimated)
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func setNowPlayingVisualizerMode(_ mode: NowPlayingVisualizerMode) {
         guard nowPlayingVisualizerMode != mode else { return }
-        nowPlayingVisualizerMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: Self.nowPlayingVisualizerModeKey)
+        preferencesStore.setNowPlayingVisualizerMode(mode)
         if mode == .fake {
             updateLiveVisualizerLevels(Array(repeating: 5, count: 6), isAvailable: false)
         }
@@ -2291,14 +2311,8 @@ final class NotchOverlayModel {
     }
 
     func setToastLyricsVisible(_ isVisible: Bool) {
-        toastShowsLyrics = isVisible
-        toastLyricsDismissed = false
-        UserDefaults.standard.set(isVisible, forKey: Self.toastLyricsVisibleKey)
-        if isVisible {
-            collapseTask?.cancel()
-            showsTrackText = true
-        }
-        notifyLayoutChange()
+        preferencesStore.setToastLyricsVisible(isVisible)
+        transientPresentationModel.setToastLyricsVisible(isVisible)
     }
 
     func updateLiveVisualizerLevels(_ levels: [CGFloat], isAvailable: Bool) {
@@ -2318,49 +2332,89 @@ final class NotchOverlayModel {
     }
 
     func setLaunchAtLoginEnabled(_ isEnabled: Bool) {
-        guard #available(macOS 13.0, *) else {
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "この macOS では自動起動設定を変更できません。"
-            notifyLayoutChange()
-            return
-        }
-
-        do {
-            if isEnabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            launchAtLoginStatusText = error.localizedDescription
-        }
-
-        refreshLaunchAtLoginStatus()
+        launchAtLoginModel.setEnabled(isEnabled)
         notifyLayoutChange()
     }
 
-    func pinFile(_ url: URL) {
-        pinnedFileURL = url
-        if let bookmarkData = try? url.bookmarkData() {
-            UserDefaults.standard.set(bookmarkData, forKey: Self.pinnedFileBookmarkKey)
-        }
+    @discardableResult
+    func pinFiles(_ urls: [URL]) -> PinnedFileAddResult {
+        let result = pinnedFileShelfStore.add(urls)
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
         perform(.generic)
         notifyLayoutChange()
+        if result.rejectedCount > 0 {
+            let message = "Shelf full — \(result.rejectedCount) item(s) were not added"
+            showPinnedFileStatus(message)
+            if expandedPanel == nil {
+                showPluginStatus(message: message, duration: 3)
+            }
+        } else if result.addedCount > 0 {
+            showPinnedFileStatus("Added \(result.addedCount) item(s)")
+        } else if result.duplicateCount > 0 {
+            showPinnedFileStatus("Already pinned — selected existing item")
+        }
+        return result
+    }
+
+    func pinFile(_ url: URL) {
+        pinFiles([url])
+    }
+
+    func selectPinnedFile(id: UUID) {
+        pinnedFileShelfStore.select(id: id)
+        refreshCompactWidgets()
+        notifyLayoutChange()
+    }
+
+    func movePinnedFile(id: UUID, before targetID: UUID) {
+        pinnedFileShelfStore.move(id: id, before: targetID)
+        notifyLayoutChange()
+    }
+
+    func removePinnedFile(id: UUID) {
+        pinnedFileShelfStore.remove(id: id)
+        ensureExpandedWidgetPage()
+        refreshCompactWidgets()
+        notifyLayoutChange()
     }
 
     func clearPinnedFile() {
-        pinnedFileURL = nil
-        UserDefaults.standard.removeObject(forKey: Self.pinnedFileBookmarkKey)
+        clearPinnedFiles()
+    }
+
+    func clearPinnedFiles() {
+        pinnedFileShelfStore.clear()
         ensureExpandedWidgetPage()
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func sharePinnedFile() {
-        guard let pinnedFileURL else { return }
+        guard let pinnedFileURL, selectedPinnedFile?.isAvailable == true else { return }
         sharePinnedFileHandler?(pinnedFileURL)
+    }
+
+    func quickLookPinnedFile() {
+        guard let pinnedFileURL, selectedPinnedFile?.isAvailable == true else { return }
+        quickLookPinnedFileHandler?(pinnedFileURL)
+    }
+
+    func choosePinnedFiles() {
+        choosePinnedFilesHandler?()
+    }
+
+    private func showPinnedFileStatus(_ message: String) {
+        pinnedFileStatusTask?.cancel()
+        pinnedFileStatusMessage = message
+        notifyLayoutChange()
+        pinnedFileStatusTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, let self else { return }
+            self.pinnedFileStatusMessage = nil
+            self.pinnedFileStatusTask = nil
+            self.notifyLayoutChange()
+        }
     }
 
     func refreshWeather() {
@@ -2368,35 +2422,37 @@ final class NotchOverlayModel {
     }
 
     func togglePomodoroRunning() {
-        pomodoroIsRunning.toggle()
-        if pomodoroIsRunning {
-            startPomodoroTimer()
-            updateTemporaryPomodoroWidget()
-        } else {
-            stopPomodoroTimer()
-        }
+        pomodoroModel.toggle()
         perform(.generic)
-        refreshCompactWidgets()
-        notifyLayoutChange()
     }
 
     func resetPomodoro() {
-        stopPomodoroTimer()
-        pomodoroPhase = .focus
-        pomodoroRemainingSeconds = pomodoroPhase.duration
-        updateTemporaryPomodoroWidget()
-        refreshCompactWidgets()
-        notifyLayoutChange()
+        pomodoroModel.reset()
     }
 
     func skipPomodoroPhase() {
-        stopPomodoroTimer()
-        pomodoroPhase = pomodoroPhase.next
-        pomodoroRemainingSeconds = pomodoroPhase.duration
-        updateTemporaryPomodoroWidget()
-        refreshCompactWidgets()
+        pomodoroModel.skip()
         perform(.generic)
-        notifyLayoutChange()
+    }
+
+    func completeReminder(id: String) {
+        reminderWidgetModel.complete(id: id)
+    }
+
+    func setReminderListEnabled(id: String, isEnabled: Bool) {
+        reminderWidgetModel.setListEnabled(id: id, isEnabled: isEnabled)
+    }
+
+    func isReminderListEnabled(id: String) -> Bool {
+        reminderWidgetModel.isListEnabled(id: id)
+    }
+
+    func requestReminderAccess() async {
+        await reminderWidgetModel.requestAccess()
+    }
+
+    func openReminderPrivacySettings() {
+        reminderWidgetModel.openSystemSettings()
     }
 
     func selectExpandedWidgetPage(_ page: ExpandedWidgetPageKind) {
@@ -2410,54 +2466,67 @@ final class NotchOverlayModel {
     }
 
     func selectExpandedWidgetPage(id: String) {
-        let pages = expandedWidgetPages
-        guard let targetIndex = pages.firstIndex(where: { $0.id == id }) else { return }
-
-        if let currentPageID = currentExpandedPageID,
-           let currentIndex = pages.firstIndex(where: { $0.id == currentPageID }),
-           currentIndex != targetIndex {
-            expandedPageNavigationDirection = targetIndex > currentIndex ? .forward : .backward
-        } else {
-            expandedPageNavigationDirection = .forward
-        }
-
-        currentExpandedPageID = id
+        guard expandedPageNavigationModel.select(pageID: id, in: expandedWidgetPageIDs) else { return }
         notifyLayoutChange()
     }
 
     func showPreviousExpandedWidgetPage() {
-        let pages = expandedWidgetPages
-        guard
-            let currentPage = activeExpandedWidgetPage,
-            let index = pages.firstIndex(where: { $0.id == currentPage.id }),
-            index > 0
-        else {
-            return
-        }
-
-        expandedPageNavigationDirection = .backward
-        currentExpandedPageID = pages[index - 1].id
+        guard expandedPageNavigationModel.selectPrevious(in: expandedWidgetPageIDs) else { return }
         notifyLayoutChange()
     }
 
     func showNextExpandedWidgetPage() {
-        let pages = expandedWidgetPages
-        guard
-            let currentPage = activeExpandedWidgetPage,
-            let index = pages.firstIndex(where: { $0.id == currentPage.id }),
-            index < pages.count - 1
-        else {
-            return
-        }
-
-        expandedPageNavigationDirection = .forward
-        currentExpandedPageID = pages[index + 1].id
+        guard expandedPageNavigationModel.selectNext(in: expandedWidgetPageIDs) else { return }
         notifyLayoutChange()
+    }
+
+    func dashboardWidgetIdentity(for slot: DashboardWidgetSlot) -> DashboardWidgetIdentity {
+        dashboardWidgetLayout[slot]
+    }
+
+    func selectDashboardWidget(_ identity: DashboardWidgetIdentity, for slot: DashboardWidgetSlot) {
+        dashboardWidgetLayoutStore.select(identity, for: slot)
+        notifyLayoutChange()
+    }
+
+    func dashboardWidgetTitle(_ identity: DashboardWidgetIdentity) -> String {
+        switch identity {
+        case .builtIn(let kind):
+            return kind.title
+        case .plugin(let id):
+            return pluginDashboardWidgets.first(where: { $0.id == id })?.title
+                ?? id.components(separatedBy: "::").last
+                ?? "Plugin Widget"
+        }
+    }
+
+    func dashboardWidgetSymbol(_ identity: DashboardWidgetIdentity) -> String {
+        switch identity {
+        case .builtIn(let kind): return kind.symbolName
+        case .plugin(let id):
+            return pluginDashboardWidgets.first(where: { $0.id == id })?.symbolName ?? "puzzlepiece.extension"
+        }
+    }
+
+    func isDashboardWidgetAvailable(_ identity: DashboardWidgetIdentity) -> Bool {
+        switch identity {
+        case .builtIn:
+            return true
+        case .plugin(let id):
+            return pluginDashboardWidgets.contains { $0.id == id }
+        }
+    }
+
+    var availableDashboardWidgets: [DashboardWidgetIdentity] {
+        BuiltInDashboardWidgetKind.allCases.map(DashboardWidgetIdentity.builtIn)
+            + pluginDashboardWidgets
+                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+                .map { .plugin($0.id) }
     }
 
     func widgetLayoutItems(for zone: CompactWidgetZone) -> [CompactWidgetLayoutItem] {
         compactWidgetLayout[zone].compactMap { identity in
-            guard let title = compactWidgetTitle(for: identity) else { return nil }
+            guard let title = compactWidgetFactory.title(for: identity, pluginWidgets: pluginWidgets) else { return nil }
             return CompactWidgetLayoutItem(
                 id: "\(zone.storageKey).\(identity.storageToken)",
                 identity: identity,
@@ -2468,60 +2537,27 @@ final class NotchOverlayModel {
     }
 
     func canMoveCompactWidget(_ identity: CompactWidgetIdentity, in zone: CompactWidgetZone, direction: MoveDirection) -> Bool {
-        let identities = compactWidgetLayout[zone]
-        guard let index = identities.firstIndex(of: identity) else { return false }
-
-        switch direction {
-        case .up:
-            return index > 0
-        case .down:
-            return index < identities.count - 1
-        }
+        widgetLayoutStore.canMove(identity, in: zone, direction: direction)
     }
 
     func moveCompactWidget(_ identity: CompactWidgetIdentity, in zone: CompactWidgetZone, direction: MoveDirection) {
-        var layout = compactWidgetLayout
-        var identities = layout[zone]
-        guard let index = identities.firstIndex(of: identity) else { return }
-
-        let targetIndex: Int
-        switch direction {
-        case .up:
-            guard index > 0 else { return }
-            targetIndex = index - 1
-        case .down:
-            guard index < identities.count - 1 else { return }
-            targetIndex = index + 1
-        }
-
-        identities.swapAt(index, targetIndex)
-        layout[zone] = identities
-        compactWidgetLayout = normalizedCompactWidgetLayout(layout)
-        saveCompactWidgetLayout()
+        guard widgetLayoutStore.move(identity, in: zone, direction: direction) else { return }
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func moveCompactWidget(_ identity: CompactWidgetIdentity, to targetZone: CompactWidgetZone) {
-        var layout = compactWidgetLayout
-        for zone in CompactWidgetZone.allCases {
-            layout[zone].removeAll { $0 == identity }
-        }
-        layout[targetZone].append(identity)
-
-        compactWidgetLayout = normalizedCompactWidgetLayout(layout)
-        saveCompactWidgetLayout()
+        guard widgetLayoutStore.move(identity, to: targetZone) else { return }
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     func isFeatureEnabled(_ feature: OverlayFeature) -> Bool {
-        featureStates[feature] ?? true
+        preferencesStore.isFeatureEnabled(feature)
     }
 
     func setFeatureEnabled(_ feature: OverlayFeature, isEnabled: Bool) {
-        featureStates[feature] = isEnabled
-        UserDefaults.standard.set(isEnabled, forKey: Self.featureKeyPrefix + feature.rawValue)
+        preferencesStore.setFeatureEnabled(feature, isEnabled: isEnabled)
 
         switch feature {
         case .pinnedFile:
@@ -2536,6 +2572,9 @@ final class NotchOverlayModel {
                 refreshCompactWidgets()
             }
         case .battery:
+            if !isEnabled {
+                clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.chargingPower))
+            }
             refreshCompactWidgets()
         case .weather:
             refreshCompactWidgets()
@@ -2544,14 +2583,25 @@ final class NotchOverlayModel {
                 ensureExpandedWidgetPage()
             }
             refreshCompactWidgets()
+        case .reminders:
+            if isEnabled {
+                reminderWidgetModel.refresh()
+            }
+            refreshCompactWidgets()
+        case .systemStatus:
+            if isEnabled {
+                systemStatusModel.start()
+            } else {
+                systemStatusModel.stop()
+            }
+            refreshCompactWidgets()
         case .volumeOverlay:
             if !isEnabled {
                 dismissVolumeOverlay()
             }
         case .hoverTitle:
             if !isEnabled {
-                showsHoverChange = false
-                showsHoverText = false
+                transientPresentationModel.disableHover()
             }
         }
 
@@ -2562,370 +2612,146 @@ final class NotchOverlayModel {
         NotificationCenter.default.post(name: Self.layoutDidChangeNotification, object: self)
     }
 
-    private func refreshLaunchAtLoginStatus() {
-        guard #available(macOS 13.0, *) else {
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "この macOS では自動起動設定を変更できません。"
-            return
-        }
-
-        switch SMAppService.mainApp.status {
-        case .enabled:
-            launchAtLoginEnabled = true
-            launchAtLoginStatusText = "ログイン時に Pull Notch を自動で起動します。"
-        case .requiresApproval:
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "システム設定のログイン項目で許可が必要です。"
-        case .notRegistered:
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "ログイン時には起動しません。"
-        case .notFound:
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "配布ビルドで利用できる自動起動サービスが見つかりません。"
-        @unknown default:
-            launchAtLoginEnabled = false
-            launchAtLoginStatusText = "自動起動の状態を判定できませんでした。"
-        }
-    }
-
     private func refreshCompactWidgets() {
+        let state = compactWidgetFactoryState
         let leading = temporaryCompactWidgets[.leading]
-            ?? firstAvailableCompactWidget(in: .leading, placement: .leading)
+            ?? compactWidgetFactory.firstAvailableWidget(
+                identities: widgetLayoutStore.layout[.leading],
+                placement: .leading,
+                state: state,
+                pluginWidgets: pluginWidgets
+            )
         let trailing = temporaryCompactWidgets[.trailing]
-            ?? firstAvailableCompactWidget(in: .trailing, placement: .trailing)
+            ?? compactWidgetFactory.firstAvailableWidget(
+                identities: widgetLayoutStore.layout[.trailing],
+                placement: .trailing,
+                state: state,
+                pluginWidgets: pluginWidgets
+            )
 
         compactWidgets = [leading, trailing].compactMap { $0 }
     }
 
-    private func firstAvailableCompactWidget(in zone: CompactWidgetZone, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
-        compactWidgetLayout[zone].lazy.compactMap { self.compactWidget(for: $0, placement: placement) }.first
-    }
-
-    private func compactWidget(for identity: CompactWidgetIdentity, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
-        switch identity {
-        case .builtIn(let kind):
-            return builtInWidget(kind, placement: placement)
-        case .plugin(let id):
-            guard let descriptor = pluginWidgets.first(where: { $0.id == id }) else { return nil }
-            return pluginCompactWidget(from: descriptor, placement: placement)
-        }
-    }
-
-    private func compactWidgetTitle(for identity: CompactWidgetIdentity) -> String? {
-        switch identity {
-        case .builtIn(let kind):
-            return kind.title
-        case .plugin(let id):
-            return pluginWidgets.first(where: { $0.id == id })?.title
-        }
-    }
-
-    private func normalizedCompactWidgetLayout(_ layout: CompactWidgetLayout) -> CompactWidgetLayout {
-        var normalized = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
-        var seen: Set<CompactWidgetIdentity> = []
-
-        for zone in CompactWidgetZone.allCases {
-            for identity in layout[zone] where seen.insert(identity).inserted {
-                normalized[zone].append(identity)
-            }
-        }
-
-        for kind in CompactWidgetKind.allCases {
-            let identity = CompactWidgetIdentity.builtIn(kind)
-            guard !seen.contains(identity) else { continue }
-            normalized[Self.defaultZone(for: kind)].append(identity)
-            seen.insert(identity)
-        }
-
-        for descriptor in pluginWidgets.sorted(by: { $0.priority < $1.priority }) {
-            let identity = CompactWidgetIdentity.plugin(descriptor.id)
-            guard !seen.contains(identity) else { continue }
-            normalized.hidden.append(identity)
-            seen.insert(identity)
-        }
-
-        return normalized
-    }
-
-    private func saveCompactWidgetLayout() {
-        for zone in CompactWidgetZone.allCases {
-            UserDefaults.standard.set(
-                compactWidgetLayout[zone].map(\.storageToken),
-                forKey: Self.compactWidgetLayoutPrefix + zone.storageKey
-            )
-        }
-    }
-
-    private static func loadCompactWidgetLayout() -> CompactWidgetLayout {
-        let hasSavedLayout = CompactWidgetZone.allCases.contains {
-            UserDefaults.standard.object(forKey: compactWidgetLayoutPrefix + $0.storageKey) != nil
-        }
-        guard hasSavedLayout else { return defaultCompactWidgetLayout() }
-
-        var layout = CompactWidgetLayout(leading: [], trailing: [], hidden: [])
-        for zone in CompactWidgetZone.allCases {
-            let tokens = UserDefaults.standard.stringArray(forKey: compactWidgetLayoutPrefix + zone.storageKey) ?? []
-            layout[zone] = tokens.compactMap(CompactWidgetIdentity.init(storageToken:))
-        }
-        return layout
-    }
-
-    private static func defaultCompactWidgetLayout() -> CompactWidgetLayout {
-        CompactWidgetLayout(
-            leading: CompactWidgetKind.allCases
-                .filter { defaultZone(for: $0) == .leading }
-                .map { .builtIn($0) },
-            trailing: CompactWidgetKind.allCases
-                .filter { defaultZone(for: $0) == .trailing }
-                .map { .builtIn($0) },
-            hidden: []
-        )
-    }
-
-    private static func defaultZone(for kind: CompactWidgetKind) -> CompactWidgetZone {
-        switch kind.placement {
-        case .leading:
-            return .leading
-        case .trailing:
-            return .trailing
-        }
-    }
-
     private func ensureExpandedWidgetPage() {
+        expandedPageNavigationModel.synchronize(pageIDs: expandedWidgetPageIDs)
+    }
+
+    private var expandedWidgetPageIDs: [String] {
+        expandedWidgetPages.map(\.id)
+    }
+
+    private var compactLayoutMetrics: NotchCompactLayoutMetrics {
+        notchLayoutModel.compactMetrics(
+            leadingStyle: leadingWidget?.style,
+            leadingWidth: leadingWidgetWidth,
+            trailingStyle: trailingWidget?.style,
+            trailingWidth: trailingWidgetWidth
+        )
+    }
+
+    private var notchLayoutSnapshot: NotchLayoutSnapshot {
+        notchLayoutModel.snapshot(for: notchLayoutState)
+    }
+
+    private var notchLayoutState: NotchLayoutState {
         let pages = expandedWidgetPages
-        if let currentExpandedPageID, pages.contains(where: { $0.id == currentExpandedPageID }) {
-            return
-        }
-        currentExpandedPageID = pages.first?.id
-    }
-
-    private func textWidth(_ text: String, font: NSFont) -> CGFloat {
-        ceil(NSString(string: text).size(withAttributes: [.font: font]).width)
-    }
-
-    private func compactWidgetWidth(for style: CompactWidgetStyle) -> CGFloat {
-        switch style {
-        case .artwork, .symbol:
-            return 24
-        case .visualizer:
-            return 26
-        case .custom:
-            return 24
-        case .labeledSymbol(let systemName, let text):
-            let textWidth = NSString(string: text).size(withAttributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .semibold)
-            ]).width
-            let iconWidth: CGFloat = systemName.isEmpty ? 0 : 12
-            return ceil(textWidth) + iconWidth + 16
-        case .circularProgress(_, _, _, let text):
-            let textWidth = NSString(string: text).size(withAttributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-            ]).width
-            return ceil(textWidth) + 42
-        }
-    }
-
-    private func builtInWidget(_ kind: CompactWidgetKind, placement: CompactWidgetPlacement) -> CompactIslandWidget? {
-        let source: CompactIslandWidget?
-        switch kind {
-        case .pinnedFile:
-            source = pinnedFileWidget
-        case .nowPlayingArtwork:
-            source = nowPlayingArtworkWidget
-        case .battery:
-            source = batteryWidget
-        case .nowPlayingVisualizer:
-            source = nowPlayingVisualizerWidget
-        case .weather:
-            source = weatherWidget
-        case .pomodoro:
-            source = pomodoroWidget
-        case .chargingPower:
-            source = chargingPowerWidget
-        }
-
-        guard let source else { return nil }
-        return CompactIslandWidget(
-            id: "\(source.id)-\(placement.storageKey)",
-            identity: source.identity,
-            title: source.title,
-            placement: placement,
-            style: source.style,
-            preferredWidth: source.preferredWidth,
-            artworkData: source.artworkData
+        let activeBuiltInPage = expandedPageCatalog.activeBuiltInPage(
+            currentPageID: currentExpandedPageID,
+            in: pages
+        )
+        return NotchLayoutState(
+            displayMode: displayMode,
+            expandedPanel: expandedPanel,
+            activeExpandedBuiltInPage: activeBuiltInPage,
+            hasExpandedPages: !pages.isEmpty,
+            expandedMaximumPreferredWidth: expandedMaxPreferredWidth,
+            leadingWidgetStyle: leadingWidget?.style,
+            leadingWidgetWidth: leadingWidgetWidth,
+            trailingWidgetStyle: trailingWidget?.style,
+            trailingWidgetWidth: trailingWidgetWidth,
+            showsBatteryLowWarning: showsBatteryLowWarning,
+            showsVolumeChange: showsVolumeChange,
+            showsPluginStatus: showsPluginStatus,
+            showsHoverChange: showsHoverChange,
+            showsTrackChange: showsTrackChange,
+            showsToastLyrics: showsToastLyrics
         )
     }
 
-    private var batteryWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.battery), let batteryLevel else { return nil }
-        let symbolName: String
-        switch batteryLevel {
-        case 90...100:
-            symbolName = batteryIsCharging ? "bolt.fill" : "battery.100percent"
-        case 50..<90:
-            symbolName = batteryIsCharging ? "bolt.fill" : "battery.75percent"
-        case 20..<50:
-            symbolName = batteryIsCharging ? "bolt.fill" : "battery.50percent"
-        default:
-            symbolName = batteryIsCharging ? "bolt.fill" : "battery.25percent"
-        }
-
-        return CompactIslandWidget(
-            id: "battery-widget",
-            identity: .builtIn(.battery),
-            title: CompactWidgetKind.battery.title,
-            placement: .leading,
-            style: .labeledSymbol(systemName: symbolName, text: "\(batteryLevel)%"),
-            preferredWidth: compactWidgetWidth(for: .labeledSymbol(systemName: symbolName, text: "\(batteryLevel)%")),
-            artworkData: nil
+    private var expandedPageCatalogState: ExpandedPageCatalogState {
+        ExpandedPageCatalogState(
+            compactWidth: compactLayoutMetrics.visibleWidth,
+            nowPlaying: .init(
+                isAvailable: currentPresentation != nil,
+                title: nowPlayingModel.title,
+                artist: nowPlayingModel.artist,
+                sourceApp: sourceApp
+            ),
+            pinnedFile: .init(
+                isEnabled: isFeatureEnabled(.pinnedFile),
+                selectedDisplayName: selectedPinnedFile?.displayName,
+                selectedParentPath: selectedPinnedFile?.parentPath,
+                count: pinnedFiles.count
+            ),
+            weather: .init(
+                isEnabled: isFeatureEnabled(.weather),
+                temperatureText: weatherTemperatureText,
+                location: manualWeatherLocation
+            ),
+            pomodoro: .init(
+                isEnabled: isFeatureEnabled(.pomodoro),
+                timeText: pomodoroTimeText,
+                phaseTitle: pomodoroPhase.title
+            )
         )
     }
 
-    private var pinnedFileWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.pinnedFile), let pinnedFileURL else { return nil }
-        let fileName = pinnedFileURL.deletingPathExtension().lastPathComponent
-        let fileIconName = symbolName(for: pinnedFileURL.pathExtension)
-        let style = CompactWidgetStyle.labeledSymbol(systemName: fileIconName, text: fileName)
-
-        return CompactIslandWidget(
-            id: "pinned-file-widget",
-            identity: .builtIn(.pinnedFile),
-            title: CompactWidgetKind.pinnedFile.title,
-            placement: .leading,
-            style: style,
-            preferredWidth: compactWidgetWidth(for: style),
-            artworkData: nil
-        )
-    }
-
-    private var weatherWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.weather),
-              let weatherTemperatureText,
-              let weatherSymbolName else { return nil }
-
-        return CompactIslandWidget(
-            id: "weather-widget",
-            identity: .builtIn(.weather),
-            title: CompactWidgetKind.weather.title,
-            placement: .trailing,
-            style: .labeledSymbol(systemName: weatherSymbolName, text: weatherTemperatureText),
-            preferredWidth: compactWidgetWidth(for: .labeledSymbol(systemName: weatherSymbolName, text: weatherTemperatureText)),
-            artworkData: nil
-        )
-    }
-
-    private var pomodoroWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.pomodoro) else { return nil }
-        let style = CompactWidgetStyle.circularProgress(
-            systemName: pomodoroPhase.symbolName,
-            progress: pomodoroProgress,
-            isActive: pomodoroIsRunning,
-            text: pomodoroTimeText
-        )
-
-        return CompactIslandWidget(
-            id: "pomodoro-widget",
-            identity: .builtIn(.pomodoro),
-            title: CompactWidgetKind.pomodoro.title,
-            placement: .trailing,
-            style: style,
-            preferredWidth: compactWidgetWidth(for: style),
-            artworkData: nil
-        )
-    }
-
-    private var chargingPowerWidget: CompactIslandWidget? {
-        guard let chargingPowerText else { return nil }
-        let style = CompactWidgetStyle.labeledSymbol(systemName: "bolt.fill", text: chargingPowerText)
-
-        return CompactIslandWidget(
-            id: "charging-power-widget",
-            identity: .builtIn(.chargingPower),
-            title: CompactWidgetKind.chargingPower.title,
-            placement: .trailing,
-            style: style,
-            preferredWidth: compactWidgetWidth(for: style),
-            artworkData: nil
-        )
-    }
-
-    private var urgentPomodoroWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.pomodoro), pomodoroIsRunning, pomodoroRemainingSeconds <= 5 else { return nil }
-        let style = CompactWidgetStyle.circularProgress(
-            systemName: "exclamationmark",
-            progress: pomodoroProgress,
-            isActive: true,
-            text: pomodoroTimeText
-        )
-
-        return CompactIslandWidget(
-            id: "urgent-pomodoro-widget",
-            identity: .builtIn(.pomodoro),
-            title: CompactWidgetKind.pomodoro.title,
-            placement: .trailing,
-            style: style,
-            preferredWidth: compactWidgetWidth(for: style),
-            artworkData: nil
-        )
-    }
-
-    private var nowPlayingArtworkWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.nowPlaying), currentPresentation != nil, nowPlayingShowsArtwork else { return nil }
-
-        return CompactIslandWidget(
-            id: "now-playing-artwork",
-            identity: .builtIn(.nowPlayingArtwork),
-            title: CompactWidgetKind.nowPlayingArtwork.title,
-            placement: .leading,
-            style: .artwork,
-            preferredWidth: compactWidgetWidth(for: .artwork),
-            artworkData: artworkData
-        )
-    }
-
-    private var nowPlayingVisualizerWidget: CompactIslandWidget? {
-        guard isFeatureEnabled(.nowPlaying), currentPresentation != nil, nowPlayingShowsVisualizer else { return nil }
-        let visualizerStyle: CompactWidgetStyle = nowPlayingAnimatesVisualizer
-            ? .visualizer(isActive: isPlaying)
-            : .symbol("music.note")
-
-        return CompactIslandWidget(
-            id: "now-playing-visualizer",
-            identity: .builtIn(.nowPlayingVisualizer),
-            title: CompactWidgetKind.nowPlayingVisualizer.title,
-            placement: .trailing,
-            style: visualizerStyle,
-            preferredWidth: compactWidgetWidth(for: visualizerStyle),
-            artworkData: nil
-        )
-    }
-
-    private func pluginCompactWidget(from descriptor: PluginWidgetDescriptor, placement: CompactWidgetPlacement) -> CompactIslandWidget {
-        let style: CompactWidgetStyle = {
-            switch descriptor.style {
-            case .artwork:
-                return .artwork
-            case .visualizer(let isActive):
-                return .visualizer(isActive: isActive)
-            case .symbol(let systemName):
-                return .symbol(systemName)
-            case .labeledSymbol(let systemName, let text):
-                return .labeledSymbol(systemName: systemName, text: text)
-            case .circularProgress(let systemName, let progress, let isActive, let text):
-                return .circularProgress(systemName: systemName, progress: progress, isActive: isActive, text: text)
-            case .custom(let render):
-                return .custom(render: render)
-            }
-        }()
-
-        return CompactIslandWidget(
-            id: "plugin-widget-\(descriptor.id)-\(placement.storageKey)",
-            identity: .plugin(descriptor.id),
-            title: descriptor.title,
-            placement: placement,
-            style: style,
-            preferredWidth: descriptor.preferredWidth,
-            artworkData: descriptor.artworkData
+    private var compactWidgetFactoryState: CompactWidgetFactoryState {
+        CompactWidgetFactoryState(
+            pinnedFile: .init(
+                isEnabled: isFeatureEnabled(.pinnedFile),
+                selectedURL: pinnedFileURL,
+                selectedDisplayName: selectedPinnedFile?.displayName,
+                count: pinnedFiles.count
+            ),
+            nowPlaying: .init(
+                isEnabled: isFeatureEnabled(.nowPlaying),
+                isAvailable: currentPresentation != nil,
+                showsArtwork: nowPlayingShowsArtwork,
+                artworkData: artworkData,
+                showsVisualizer: nowPlayingShowsVisualizer,
+                animatesVisualizer: nowPlayingAnimatesVisualizer,
+                isPlaying: isPlaying
+            ),
+            battery: .init(
+                isEnabled: isFeatureEnabled(.battery),
+                level: batteryLevel ?? accessoryBatteryDevices.first?.level,
+                symbolName: batteryModel.symbolName ?? accessoryBatteryDevices.first?.symbolName,
+                chargingPowerText: chargingPowerText
+            ),
+            weather: .init(
+                isEnabled: isFeatureEnabled(.weather),
+                temperatureText: weatherTemperatureText,
+                symbolName: weatherSymbolName
+            ),
+            pomodoro: .init(
+                isEnabled: isFeatureEnabled(.pomodoro),
+                symbolName: pomodoroPhase.symbolName,
+                progress: pomodoroProgress,
+                isRunning: pomodoroIsRunning,
+                remainingSeconds: pomodoroRemainingSeconds,
+                timeText: pomodoroTimeText
+            ),
+            reminders: .init(
+                isEnabled: isFeatureEnabled(.reminders),
+                isAuthorized: reminderAccessState == .authorized,
+                remainingCount: reminderWidgetModel.remainingCount,
+                overdueCount: reminderWidgetModel.overdueCount
+            ),
+            systemStatus: .init(
+                isEnabled: isFeatureEnabled(.systemStatus),
+                cpuUsage: systemStatusSnapshot.cpuUsage
+            )
         )
     }
 
@@ -2937,29 +2763,19 @@ final class NotchOverlayModel {
     }
 
     var pomodoroTimeText: String {
-        let minutes = pomodoroRemainingSeconds / 60
-        let seconds = pomodoroRemainingSeconds % 60
-        return String(format: "%02d:%02d", minutes, seconds)
+        pomodoroModel.timeText
     }
 
     var showsBatteryLowWarning: Bool {
-        guard let batteryLevel else { return false }
-        return batteryLevel < 10 && !batteryIsCharging && expandedPanel == nil
+        batteryModel.showsLowWarning(canPresent: expandedPanel == nil)
     }
 
     var chargingPowerText: String? {
-        guard let chargingPowerWatts else { return nil }
-        if chargingPowerWatts >= 10 {
-            return "\(Int(chargingPowerWatts.rounded()))W"
-        } else {
-            return String(format: "%.1fW", chargingPowerWatts)
-        }
+        batteryModel.chargingPowerText
     }
 
     var pomodoroProgress: CGFloat {
-        let duration = max(CGFloat(pomodoroPhase.duration), 1)
-        let remaining = CGFloat(pomodoroRemainingSeconds)
-        return max(0, min(1, 1 - (remaining / duration)))
+        pomodoroModel.progress
     }
 
     var usesRealNowPlayingVisualizer: Bool {
@@ -2977,103 +2793,17 @@ final class NotchOverlayModel {
         }
     }
 
-    private func normalizedLyricsRequestKey(for track: AppleMusicTrack) -> String? {
-        guard
-            let durationSeconds = track.durationSeconds,
-            durationSeconds > 0
-        else {
-            return nil
-        }
-
-        let normalizedTitle = track.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedArtist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedAlbum = track.album.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !normalizedTitle.isEmpty, !normalizedArtist.isEmpty else {
-            return nil
-        }
-
-        return [
-            normalizedTitle.lowercased(),
-            normalizedArtist.lowercased(),
-            normalizedAlbum.lowercased(),
-            String(Int(durationSeconds.rounded()))
-        ]
-        .joined(separator: "||")
-    }
-
-    private func loadLyrics(for track: AppleMusicTrack, requestKey: String?) {
-        lyricsTask?.cancel()
-        currentLyricsRequestKey = requestKey
-        syncedLyrics = []
-        plainLyricsText = nil
-        lyricsProvider = nil
-
-        guard let requestKey else {
-            lyricsLoadState = .unavailable
-            notifyLayoutChange()
-            return
-        }
-
-        lyricsLoadState = .loading
-        notifyLayoutChange()
-
-        lyricsTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            let lyrics = await lyricsService.lyrics(
-                trackName: track.title,
-                artistName: track.artist,
-                albumName: track.album,
-                durationSeconds: track.durationSeconds
-            )
-
-            guard !Task.isCancelled, self.currentLyricsRequestKey == requestKey else { return }
-
-            let parsedSyncedLyrics = await lyricsService.parseSyncedLyrics(lyrics?.syncedLyrics)
-            guard !Task.isCancelled, self.currentLyricsRequestKey == requestKey else { return }
-
-            self.syncedLyrics = parsedSyncedLyrics
-            self.plainLyricsText = lyrics?.plainLyrics?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.lyricsProvider = lyrics?.provider
-
-            if !parsedSyncedLyrics.isEmpty {
-                self.lyricsLoadState = .ready
-            } else if self.plainLyricsText?.isEmpty == false {
-                self.lyricsLoadState = .ready
-            } else {
-                self.lyricsLoadState = .unavailable
-            }
-
-            self.notifyLayoutChange()
-        }
-    }
-
-    private func clampedPlaybackPosition(_ position: TimeInterval) -> TimeInterval {
-        guard let duration = nowPlayingDurationSeconds, duration > 0 else {
-            return max(0, position)
-        }
-        return min(max(0, position), duration)
-    }
-
     private func updateVisualizerPalette(from artworkData: Data?) {
         guard
             let artworkData,
-            let palette = artworkPalette(from: artworkData)
+            let palette = artworkPaletteExtractor.palette(from: artworkData)
         else {
             resetVisualizerPalette()
             return
         }
 
-        let brightColor = palette.mainColor
-            .withSaturation(multiplier: 1.18)
-            .withBrightness(multiplier: 1.08)
-        let darkColor = palette.subColor
-            .withSaturation(multiplier: 1.12)
-            .withBrightness(multiplier: 0.9)
-
-        visualizerBrightColor = Color(nsColor: brightColor.withAlphaComponent(0.98))
-        visualizerDarkColor = Color(nsColor: darkColor.withAlphaComponent(0.9))
+        visualizerBrightColor = Color(nsColor: palette.brightColor)
+        visualizerDarkColor = Color(nsColor: palette.darkColor)
     }
 
     private func resetVisualizerPalette() {
@@ -3081,226 +2811,42 @@ final class NotchOverlayModel {
         visualizerDarkColor = .white.opacity(0.6)
     }
 
-    private func artworkPalette(from artworkData: Data) -> ArtworkPalette? {
-        guard
-            let image = NSImage(data: artworkData),
-            let tiffData = image.tiffRepresentation,
-            let bitmap = NSBitmapImageRep(data: tiffData)
-        else {
-            return nil
-        }
-
-        let sampleSize = 28
-        guard
-            let reduced = NSBitmapImageRep(
-                bitmapDataPlanes: nil,
-                pixelsWide: sampleSize,
-                pixelsHigh: sampleSize,
-                bitsPerSample: 8,
-                samplesPerPixel: 4,
-                hasAlpha: true,
-                isPlanar: false,
-                colorSpaceName: .deviceRGB,
-                bytesPerRow: 0,
-                bitsPerPixel: 0
-            )
-        else {
-            return nil
-        }
-
-        NSGraphicsContext.saveGraphicsState()
-        if let context = NSGraphicsContext(bitmapImageRep: reduced) {
-            NSGraphicsContext.current = context
-            context.imageInterpolation = .medium
-            image.draw(in: NSRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
-            context.flushGraphics()
-        }
-        NSGraphicsContext.restoreGraphicsState()
-
-        struct Bucket {
-            var count: Int = 0
-            var red: CGFloat = 0
-            var green: CGFloat = 0
-            var blue: CGFloat = 0
-            var prominence: CGFloat = 0
-        }
-
-        var buckets: [String: Bucket] = [:]
-
-        for y in 0..<sampleSize {
-            for x in 0..<sampleSize {
-                guard let color = reduced.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-                guard let rgb = color.rgbComponents, let hsb = color.hsbComponents else { continue }
-                guard rgb.alpha > 0.2 else { continue }
-                guard hsb.brightness > 0.12 else { continue }
-
-                let redKey = Int((rgb.red * 255).rounded()) / 32
-                let greenKey = Int((rgb.green * 255).rounded()) / 32
-                let blueKey = Int((rgb.blue * 255).rounded()) / 32
-                let key = "\(redKey)-\(greenKey)-\(blueKey)"
-
-                var bucket = buckets[key] ?? Bucket()
-                bucket.count += 1
-                bucket.red += rgb.red
-                bucket.green += rgb.green
-                bucket.blue += rgb.blue
-                bucket.prominence += (hsb.saturation * 1.9) + (hsb.brightness * 1.1)
-                buckets[key] = bucket
-            }
-        }
-
-        let rankedColors = buckets.values.compactMap { bucket -> (color: NSColor, score: CGFloat)? in
-            guard bucket.count > 0 else { return nil }
-
-            let averagedColor = NSColor(
-                calibratedRed: bucket.red / CGFloat(bucket.count),
-                green: bucket.green / CGFloat(bucket.count),
-                blue: bucket.blue / CGFloat(bucket.count),
-                alpha: 1
-            )
-
-            guard let hsb = averagedColor.hsbComponents else { return nil }
-            let score =
-                bucket.prominence
-                + (CGFloat(bucket.count) * 0.95)
-                + (hsb.saturation * 18)
-                + (hsb.brightness * 10)
-            return (averagedColor, score)
-        }
-        .sorted { $0.score > $1.score }
-
-        guard let mainColor = rankedColors.first?.color else { return nil }
-
-        let subColor = rankedColors.first(where: { candidate in
-            candidate.color.distance(to: mainColor) > 0.24
-        })?.color ?? mainColor
-
-        return ArtworkPalette(mainColor: mainColor, subColor: subColor)
-    }
-
-    private func extendVolumeOverlayVisibility(by duration: TimeInterval) {
-        let deadline = Date().addingTimeInterval(duration)
-        volumeOverlayVisibleUntil = deadline
-        appLog.debug("VolumeOverlay: extend deadline=\(deadline.timeIntervalSince1970)")
-
-        guard volumeHideTask == nil else {
-            appLog.debug("VolumeOverlay: deadline extended, watcher already running")
-            return
-        }
-
-        appLog.debug("VolumeOverlay: start hide watcher")
-
-        volumeHideTask = Task { @MainActor [weak self] in
-            while let self, !Task.isCancelled {
-                guard let visibleUntil = self.volumeOverlayVisibleUntil else { break }
-                let remaining = visibleUntil.timeIntervalSinceNow
-
-                appLog.debug("VolumeOverlay: watcher remaining=\(String(format: "%.3f", remaining))")
-
-                if remaining <= 0 {
-                    appLog.debug("VolumeOverlay: deadline reached, dismissing")
-                    self.dismissVolumeOverlay()
-                    break
-                }
-
-                let sleepDuration = min(remaining, 0.12)
-                try? await Task.sleep(for: .seconds(sleepDuration))
-            }
-        }
-    }
-
     private func dismissVolumeOverlay(resetLevel: Bool = false) {
-        appLog.debug("VolumeOverlay: dismiss resetLevel=\(resetLevel)")
-        volumeHideTask?.cancel()
-        volumeHideTask = nil
-        volumeOverlayVisibleUntil = nil
-        showsVolumeChange = false
-        volumeOutputDeviceName = nil
-        if resetLevel {
-            volumeLevel = 0
-        }
-    }
-
-    private func startPomodoroTimer() {
-        pomodoroTimerTask?.cancel()
-        pomodoroTimerTask = Task { @MainActor [weak self] in
-            while let self, !Task.isCancelled, self.pomodoroIsRunning {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled, self.pomodoroIsRunning else { return }
-
-                if self.pomodoroRemainingSeconds > 0 {
-                    self.pomodoroRemainingSeconds -= 1
-                }
-
-                if self.pomodoroRemainingSeconds <= 0 {
-                    self.pomodoroPhase = self.pomodoroPhase.next
-                    self.pomodoroRemainingSeconds = self.pomodoroPhase.duration
-                    self.perform(.alignment)
-                    self.playPomodoroTransitionSound()
-                }
-
-                self.updateTemporaryPomodoroWidget()
-                self.refreshCompactWidgets()
-                self.notifyLayoutChange()
-            }
-        }
-    }
-
-    private func stopPomodoroTimer() {
-        pomodoroIsRunning = false
-        pomodoroTimerTask?.cancel()
-        pomodoroTimerTask = nil
-    }
-
-    private func shouldShowChargingPowerIndicator(
-        previousStatus: (level: Int, isCharging: Bool, chargingWatts: Double?)?,
-        chargingWatts: Double
-    ) -> Bool {
-        guard expandedPanel == nil else { return false }
-        guard let previousStatus else { return true }
-        if !previousStatus.isCharging { return true }
-        guard let previousWatts = previousStatus.chargingWatts else { return true }
-        return abs(previousWatts - chargingWatts) >= 2
+        volumeOverlayModel.dismiss(resetLevel: resetLevel)
     }
 
     private func showChargingPowerIndicator() {
-        guard let chargingPowerWidget else { return }
+        guard let chargingPowerWidget = compactWidgetFactory.chargingPowerWidget(state: compactWidgetFactoryState) else { return }
         presentTemporaryCompactWidget(chargingPowerWidget, duration: 3)
     }
 
     private func updateTemporaryPomodoroWidget() {
-        if let urgentPomodoroWidget {
+        if let urgentPomodoroWidget = compactWidgetFactory.urgentPomodoroWidget(state: compactWidgetFactoryState) {
             setTemporaryCompactWidget(urgentPomodoroWidget)
         } else {
             clearTemporaryCompactWidget(for: .trailing, identity: .builtIn(.pomodoro))
         }
     }
 
+    private func handlePomodoroUpdate() {
+        updateTemporaryPomodoroWidget()
+    }
+
     private func presentTemporaryCompactWidget(_ widget: CompactIslandWidget, duration: TimeInterval) {
-        setTemporaryCompactWidget(widget)
-        temporaryWidgetTasks[widget.placement]?.cancel()
-        temporaryWidgetTasks[widget.placement] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            self?.clearTemporaryCompactWidget(for: widget.placement, identity: widget.identity)
-        }
+        temporaryWidgetStore.present(widget, duration: duration)
     }
 
     private func setTemporaryCompactWidget(_ widget: CompactIslandWidget) {
-        temporaryCompactWidgets[widget.placement] = widget
+        temporaryWidgetStore.set(widget)
+    }
+
+    private func handleTemporaryWidgetUpdate() {
         refreshCompactWidgets()
         notifyLayoutChange()
     }
 
     private func clearTemporaryCompactWidget(for placement: CompactWidgetPlacement, identity: CompactWidgetIdentity? = nil) {
-        if let identity, temporaryCompactWidgets[placement]?.identity != identity {
-            return
-        }
-        temporaryWidgetTasks[placement]?.cancel()
-        temporaryWidgetTasks[placement] = nil
-        temporaryCompactWidgets[placement] = nil
-        refreshCompactWidgets()
-        notifyLayoutChange()
+        temporaryWidgetStore.clear(placement: placement, identity: identity)
     }
 
     func attachPluginManager(_ pluginManager: PluginManager) {
@@ -3308,7 +2854,17 @@ final class NotchOverlayModel {
     }
 
     func updatePluginRuntimeInfos(_ infos: [PluginRuntimeInfo]) {
-        pluginRuntimeInfos = infos
+        pluginHostStore.updateRuntimeInfos(infos)
+    }
+
+    private func handlePluginHostChange(_ change: PluginHostChange) {
+        if change.contains(.widgets) {
+            widgetLayoutStore.synchronize(availablePluginIDs: pluginHostStore.availableWidgetIDs)
+            refreshCompactWidgets()
+        }
+        if change.contains(.expandedPages) {
+            ensureExpandedWidgetPage()
+        }
         notifyLayoutChange()
     }
 
@@ -3358,7 +2914,7 @@ final class NotchOverlayModel {
         guard expandedPanel != .onboarding, expandedPanel != .musicPlayer else { return }
         expandedPanel = .musicPlayer
         ensureExpandedWidgetPage()
-        showsPluginStatus = false
+        transientPresentationModel.hidePluginStatus()
         notifyLayoutChange()
     }
 
@@ -3368,11 +2924,26 @@ final class NotchOverlayModel {
                 NSLocalizedDescriptionKey: "Invalid widget payload."
             ])
         }
-        registerPluginWidget(descriptor, pluginID: bridgePluginID(for: clientID))
+        pluginHostStore.registerWidget(descriptor, pluginID: bridgePluginID(for: clientID))
     }
 
     func bridgeRemoveWidget(id: String, clientID: String) {
-        unregisterPluginWidget(id: id, pluginID: bridgePluginID(for: clientID))
+        pluginHostStore.unregisterWidget(id: id, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeUpsertDashboardWidget(_ payload: BridgeDashboardWidgetPayload, clientID: String) {
+        let descriptor = PluginDashboardWidgetDescriptor(
+            id: payload.id,
+            title: payload.title,
+            symbolName: payload.symbolName ?? "puzzlepiece.extension"
+        ) {
+            AnyView(BridgePageView(payload: payload.pagePayload, contentPadding: 8))
+        }
+        pluginHostStore.registerDashboardWidget(descriptor, pluginID: bridgePluginID(for: clientID))
+    }
+
+    func bridgeRemoveDashboardWidget(id: String, clientID: String) {
+        pluginHostStore.unregisterDashboardWidget(id: id, pluginID: bridgePluginID(for: clientID))
     }
 
     func bridgeUpsertPage(_ payload: BridgePagePayload, clientID: String) {
@@ -3384,7 +2955,7 @@ final class NotchOverlayModel {
             AnyView(BridgePageView(payload: payload, onDismiss: { self?.dismissExpandedPanel() }))
         }
 
-        registerPluginExpandedPage(descriptor, pluginID: bridgePluginID(for: clientID))
+        pluginHostStore.registerExpandedPage(descriptor, pluginID: bridgePluginID(for: clientID))
 
         if payload.notification == true {
             let scopedID = "\(bridgePluginID(for: clientID))::\(payload.id)"
@@ -3394,10 +2965,7 @@ final class NotchOverlayModel {
                 expandedPanel = .musicPlayer
                 ensureExpandedWidgetPage()
                 dismissVolumeOverlay()
-                showsPluginStatus = false
-                pluginStatusMessage = nil
-                showsTrackChange = false
-                showsTrackText = false
+                transientPresentationModel.hideTrackAndPluginStatus()
                 perform(.generic)
             }
 
@@ -3407,7 +2975,7 @@ final class NotchOverlayModel {
     }
 
     func bridgeRemovePage(id: String, clientID: String) {
-        unregisterPluginExpandedPage(id: id, pluginID: bridgePluginID(for: clientID))
+        pluginHostStore.unregisterExpandedPage(id: id, pluginID: bridgePluginID(for: clientID))
     }
 
     func bridgeClearContent(clientID: String) {
@@ -3419,37 +2987,17 @@ final class NotchOverlayModel {
     }
 
     func settingsSectionsForPlugin(_ pluginID: String) -> [PluginSettingsSectionDescriptor] {
-        pluginSettingsSections.filter { $0.id.hasPrefix("\(pluginID)::") }
+        pluginHostStore.settingsSections(for: pluginID)
     }
 
     func makePluginContext(for manifest: PluginManifest) -> PluginContext {
-        PluginContext(
-            manifest: manifest,
-            registerWidgetHandler: { [weak self] in self?.registerPluginWidget($0, pluginID: manifest.id) },
-            unregisterWidgetHandler: { [weak self] in self?.unregisterPluginWidget(id: $0, pluginID: manifest.id) },
-            registerExpandedPageHandler: { [weak self] in self?.registerPluginExpandedPage($0, pluginID: manifest.id) },
-            unregisterExpandedPageHandler: { [weak self] in self?.unregisterPluginExpandedPage(id: $0, pluginID: manifest.id) },
-            registerSettingsSectionHandler: { [weak self] in self?.registerPluginSettingsSection($0, pluginID: manifest.id) },
-            unregisterSettingsSectionHandler: { [weak self] in self?.unregisterPluginSettingsSection(id: $0, pluginID: manifest.id) },
-            showStatusHandler: { [weak self] message, duration in self?.showPluginStatus(message: message, duration: duration) },
-            subscribeHandler: { [weak self] in self?.subscribePluginEvents($0) ?? UUID() },
-            unsubscribeHandler: { [weak self] in self?.unsubscribePluginEvents($0) },
-            nowPlayingProvider: { [weak self] in self?.pluginNowPlayingSnapshot },
-            weatherProvider: { [weak self] in self?.pluginWeatherSnapshot ?? PluginWeatherSnapshot(temperatureText: nil, symbolName: nil, manualLocation: nil) },
-            volumeProvider: { [weak self] in self?.pluginVolumeSnapshot }
-        )
+        pluginHostStore.makeContext(for: manifest) { [weak self] message, duration in
+            self?.showPluginStatus(message: message, duration: duration)
+        }
     }
 
     func unregisterPluginContent(for pluginID: String) {
-        pluginWidgets.removeAll { $0.id.hasPrefix("\(pluginID)::") }
-        pluginExpandedPageDescriptors.removeAll { $0.id.hasPrefix("\(pluginID)::") }
-        pluginSettingsSections.removeAll { $0.id.hasPrefix("\(pluginID)::") }
-        if activeExpandedWidgetPage.map({ if case .plugin(let id) = $0.source { return id.hasPrefix("\(pluginID)::") } else { return false } }) == true {
-            currentExpandedPageID = nil
-            ensureExpandedWidgetPage()
-        }
-        refreshCompactWidgets()
-        notifyLayoutChange()
+        pluginHostStore.unregisterContent(for: pluginID)
     }
 
     private func bridgePluginID(for clientID: String) -> String {
@@ -3457,71 +3005,11 @@ final class NotchOverlayModel {
         return "bridge.\(sanitized)"
     }
 
-    private func registerPluginWidget(_ descriptor: PluginWidgetDescriptor, pluginID: String) {
-        let scoped = PluginWidgetDescriptor(
-            id: "\(pluginID)::\(descriptor.id)",
-            title: descriptor.title,
-            placement: descriptor.placement,
-            priority: descriptor.priority,
-            style: descriptor.style,
-            preferredWidth: descriptor.preferredWidth,
-            artworkData: descriptor.artworkData
-        )
-        pluginWidgets.removeAll { $0.id == scoped.id }
-        pluginWidgets.append(scoped)
-        compactWidgetLayout = normalizedCompactWidgetLayout(compactWidgetLayout)
-        saveCompactWidgetLayout()
-        refreshCompactWidgets()
-        notifyLayoutChange()
-    }
-
-    private func unregisterPluginWidget(id: String, pluginID: String) {
-        pluginWidgets.removeAll { $0.id == "\(pluginID)::\(id)" }
-        refreshCompactWidgets()
-        notifyLayoutChange()
-    }
-
-    private func registerPluginExpandedPage(_ descriptor: PluginExpandedPageDescriptor, pluginID: String) {
-        let scoped = PluginExpandedPageDescriptor(
-            id: "\(pluginID)::\(descriptor.id)",
-            title: descriptor.title,
-            preferredWidth: descriptor.preferredWidth,
-            render: descriptor.render
-        )
-        pluginExpandedPageDescriptors.removeAll { $0.id == scoped.id }
-        pluginExpandedPageDescriptors.append(scoped)
-        ensureExpandedWidgetPage()
-        notifyLayoutChange()
-    }
-
-    private func unregisterPluginExpandedPage(id: String, pluginID: String) {
-        pluginExpandedPageDescriptors.removeAll { $0.id == "\(pluginID)::\(id)" }
-        ensureExpandedWidgetPage()
-        notifyLayoutChange()
-    }
-
-    private func registerPluginSettingsSection(_ descriptor: PluginSettingsSectionDescriptor, pluginID: String) {
-        let scoped = PluginSettingsSectionDescriptor(
-            id: "\(pluginID)::\(descriptor.id)",
-            title: descriptor.title,
-            subtitle: descriptor.subtitle,
-            render: descriptor.render
-        )
-        pluginSettingsSections.removeAll { $0.id == scoped.id }
-        pluginSettingsSections.append(scoped)
-        notifyLayoutChange()
-    }
-
-    private func unregisterPluginSettingsSection(id: String, pluginID: String) {
-        pluginSettingsSections.removeAll { $0.id == "\(pluginID)::\(id)" }
-        notifyLayoutChange()
-    }
-
     private var pluginNowPlayingSnapshot: PluginNowPlayingSnapshot? {
-        guard let currentPresentation else { return nil }
+        guard currentPresentation != nil else { return nil }
         return PluginNowPlayingSnapshot(
-            title: currentPresentation.detailLine?.components(separatedBy: " - ").first ?? "",
-            artist: currentPresentation.detailLine?.components(separatedBy: " - ").dropFirst().joined(separator: " - ") ?? "",
+            title: nowPlayingModel.title ?? "",
+            artist: nowPlayingModel.artist ?? "",
             album: albumName ?? "",
             sourceApp: sourceApp,
             isPlaying: isPlaying
@@ -3540,46 +3028,9 @@ final class NotchOverlayModel {
         return PluginVolumeSnapshot(level: volumeLevel, outputDeviceName: volumeOutputDeviceName)
     }
 
-    private func subscribePluginEvents(_ handler: @escaping @MainActor (PluginHostEvent) -> Void) -> UUID {
-        let token = UUID()
-        pluginEventHandlers[token] = handler
-        handler(.nowPlaying(pluginNowPlayingSnapshot))
-        handler(.weather(pluginWeatherSnapshot))
-        if let pluginVolumeSnapshot {
-            handler(.volume(pluginVolumeSnapshot))
-        }
-        return token
-    }
-
-    private func unsubscribePluginEvents(_ token: UUID) {
-        pluginEventHandlers[token] = nil
-    }
-
-    private func broadcastPluginEvent(_ event: PluginHostEvent) {
-        for handler in pluginEventHandlers.values {
-            handler(event)
-        }
-    }
-
     func showPluginStatus(message: String, duration: TimeInterval = 3) {
-        pluginStatusTask?.cancel()
-        pluginStatusMessage = message
-        showsTrackChange = false
-        showsTrackText = false
-        showsHoverChange = false
-        showsHoverText = false
         dismissVolumeOverlay()
-        showsPluginStatus = true
-        notifyLayoutChange()
-
-        pluginStatusTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            self?.showsPluginStatus = false
-            self?.pluginStatusMessage = nil
-            self?.pluginStatusTask = nil
-            self?.notifyLayoutChange()
-        }
+        transientPresentationModel.showPluginStatus(message: message, duration: duration)
     }
 
     private func playPomodoroTransitionSound() {
@@ -3618,40 +3069,4 @@ final class NotchOverlayModel {
             .lowercased()
     }
 
-    private func symbolName(for pathExtension: String) -> String {
-        if let type = UTType(filenameExtension: pathExtension) {
-            if type.conforms(to: .image) {
-                return "photo"
-            }
-            if type.conforms(to: .movie) || type.conforms(to: .audiovisualContent) {
-                return "film"
-            }
-            if type.conforms(to: .audio) {
-                return "waveform"
-            }
-            if type.conforms(to: .pdf) {
-                return "doc.richtext"
-            }
-            if type.conforms(to: .archive) {
-                return "archivebox"
-            }
-            if type.conforms(to: .text) {
-                return "doc.text"
-            }
-        }
-
-        return "doc"
-    }
-
-    private static func restorePinnedFileURL() -> URL? {
-        guard let bookmarkData = UserDefaults.standard.data(forKey: pinnedFileBookmarkKey) else { return nil }
-        var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: bookmarkData, bookmarkDataIsStale: &isStale) else {
-            return nil
-        }
-        if isStale, let newBookmark = try? url.bookmarkData() {
-            UserDefaults.standard.set(newBookmark, forKey: pinnedFileBookmarkKey)
-        }
-        return url
-    }
 }

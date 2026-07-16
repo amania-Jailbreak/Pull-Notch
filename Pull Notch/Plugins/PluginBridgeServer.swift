@@ -5,6 +5,14 @@ import SwiftUI
 
 private let bridgeLog = Logger(subsystem: "jp.amania.Pull-Notch", category: "PluginBridge")
 
+nonisolated private final class WeakReference<Value: AnyObject>: @unchecked Sendable {
+    weak var value: Value?
+
+    init(_ value: Value) {
+        self.value = value
+    }
+}
+
 @MainActor
 final class PluginBridgeServer {
     private struct ConnectionState {
@@ -34,9 +42,11 @@ final class PluginBridgeServer {
 
     static let shared = PluginBridgeServer()
     static let defaultPort: UInt16 = 38591
+    private static let maximumRequestBytes = 256 * 1024
 
     private weak var overlayModel: NotchOverlayModel?
     private let queue = DispatchQueue(label: "jp.amania.PullNotch.PluginBridgeServer")
+    private lazy var weakReference = WeakReference(self)
     private var listener: NWListener?
     private var connections: [UUID: ConnectionState] = [:]
 
@@ -68,9 +78,10 @@ final class PluginBridgeServer {
                     }
                 }
             }
-            listener.newConnectionHandler = { [weak self] connection in
+            let weakReference = self.weakReference
+            listener.newConnectionHandler = { connection in
                 Task { @MainActor in
-                    self?.accept(connection)
+                    weakReference.value?.accept(connection)
                 }
             }
             listener.start(queue: queue)
@@ -84,9 +95,10 @@ final class PluginBridgeServer {
         let connectionID = UUID()
         connections[connectionID] = ConnectionState(connection: connection)
 
-        connection.stateUpdateHandler = { [weak self] state in
+        let weakReference = self.weakReference
+        connection.stateUpdateHandler = { state in
             Task { @MainActor in
-                self?.handle(state: state, connectionID: connectionID)
+                weakReference.value?.handle(state: state, connectionID: connectionID)
             }
         }
 
@@ -134,9 +146,10 @@ final class PluginBridgeServer {
     }
 
     private func receiveNext(on connection: NWConnection, connectionID: UUID) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        let weakReference = self.weakReference
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self = weakReference.value else { return }
 
                 if let data, !data.isEmpty {
                     self.append(data: data, to: connectionID)
@@ -157,11 +170,23 @@ final class PluginBridgeServer {
         state.buffer.append(data)
 
         while let newlineRange = state.buffer.firstRange(of: Data([0x0A])) {
+            let lineLength = state.buffer.distance(from: state.buffer.startIndex, to: newlineRange.lowerBound)
+            guard lineLength <= Self.maximumRequestBytes else {
+                bridgeLog.error("closing connection with oversized request")
+                close(connectionID: connectionID)
+                return
+            }
             let line = state.buffer.subdata(in: state.buffer.startIndex ..< newlineRange.lowerBound)
             state.buffer.removeSubrange(state.buffer.startIndex ... newlineRange.lowerBound)
 
             guard !line.isEmpty else { continue }
             handle(line: line, connectionID: connectionID)
+        }
+
+        guard state.buffer.count <= Self.maximumRequestBytes else {
+            bridgeLog.error("closing connection whose request buffer exceeded the limit")
+            close(connectionID: connectionID)
+            return
         }
 
         connections[connectionID] = state
@@ -230,6 +255,22 @@ final class PluginBridgeServer {
                 throw BridgeError.missingField("widgetID")
             }
             overlayModel.bridgeRemoveWidget(id: widgetID, clientID: clientID)
+            return ["removed": true]
+        case "setDashboardWidget":
+            guard let clientID = payload["clientID"] as? String else {
+                throw BridgeError.missingField("clientID")
+            }
+            let widget = try decodePayload(BridgeDashboardWidgetPayload.self, from: payload["widget"], field: "widget")
+            overlayModel.bridgeUpsertDashboardWidget(widget, clientID: clientID)
+            return ["updated": true]
+        case "removeDashboardWidget":
+            guard let clientID = payload["clientID"] as? String else {
+                throw BridgeError.missingField("clientID")
+            }
+            guard let widgetID = payload["widgetID"] as? String else {
+                throw BridgeError.missingField("widgetID")
+            }
+            overlayModel.bridgeRemoveDashboardWidget(id: widgetID, clientID: clientID)
             return ["removed": true]
         case "setPage":
             guard let clientID = payload["clientID"] as? String else {

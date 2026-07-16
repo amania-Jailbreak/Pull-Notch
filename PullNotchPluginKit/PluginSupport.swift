@@ -4,6 +4,7 @@ import SwiftUI
 
 public enum PluginCapability: String, CaseIterable, Sendable {
     case widget
+    case dashboardWidget
     case expandedPage
     case settings
 }
@@ -33,7 +34,7 @@ public enum PluginWidgetStyle {
     case symbol(String)
     case labeledSymbol(systemName: String, text: String)
     case circularProgress(systemName: String, progress: CGFloat, isActive: Bool, text: String)
-    case custom(render: @MainActor () -> AnyView)
+    case custom(render: @MainActor @Sendable () -> AnyView)
 }
 
 public struct PluginWidgetDescriptor: Identifiable {
@@ -68,12 +69,31 @@ public struct PluginExpandedPageDescriptor: Identifiable {
     public let id: String
     public let title: String
     public let preferredWidth: CGFloat
-    public let render: @MainActor () -> AnyView
+    public let render: @MainActor @Sendable () -> AnyView
 
-    public init(id: String, title: String, preferredWidth: CGFloat, render: @escaping @MainActor () -> AnyView) {
+    public init(id: String, title: String, preferredWidth: CGFloat, render: @escaping @MainActor @Sendable () -> AnyView) {
         self.id = id
         self.title = title
         self.preferredWidth = preferredWidth
+        self.render = render
+    }
+}
+
+public struct PluginDashboardWidgetDescriptor: Identifiable {
+    public let id: String
+    public let title: String
+    public let symbolName: String
+    public let render: @MainActor @Sendable () -> AnyView
+
+    public init(
+        id: String,
+        title: String,
+        symbolName: String,
+        render: @escaping @MainActor @Sendable () -> AnyView
+    ) {
+        self.id = id
+        self.title = title
+        self.symbolName = symbolName
         self.render = render
     }
 }
@@ -82,9 +102,9 @@ public struct PluginSettingsSectionDescriptor: Identifiable {
     public let id: String
     public let title: String
     public let subtitle: String?
-    public let render: @MainActor () -> AnyView
+    public let render: @MainActor @Sendable () -> AnyView
 
-    public init(id: String, title: String, subtitle: String? = nil, render: @escaping @MainActor () -> AnyView) {
+    public init(id: String, title: String, subtitle: String? = nil, render: @escaping @MainActor @Sendable () -> AnyView) {
         self.id = id
         self.title = title
         self.subtitle = subtitle
@@ -152,10 +172,12 @@ public final class PluginContext {
     private let unregisterWidgetHandler: (String) -> Void
     private let registerExpandedPageHandler: (PluginExpandedPageDescriptor) -> Void
     private let unregisterExpandedPageHandler: (String) -> Void
+    private let registerDashboardWidgetHandler: (PluginDashboardWidgetDescriptor) -> Void
+    private let unregisterDashboardWidgetHandler: (String) -> Void
     private let registerSettingsSectionHandler: (PluginSettingsSectionDescriptor) -> Void
     private let unregisterSettingsSectionHandler: (String) -> Void
     private let showStatusHandler: (String, TimeInterval) -> Void
-    private let subscribeHandler: (@escaping @MainActor (PluginHostEvent) -> Void) -> UUID
+    private let subscribeHandler: (@escaping @MainActor @Sendable (PluginHostEvent) -> Void) -> UUID
     private let unsubscribeHandler: (UUID) -> Void
     private let nowPlayingProvider: () -> PluginNowPlayingSnapshot?
     private let weatherProvider: () -> PluginWeatherSnapshot
@@ -167,10 +189,12 @@ public final class PluginContext {
         unregisterWidgetHandler: @escaping (String) -> Void,
         registerExpandedPageHandler: @escaping (PluginExpandedPageDescriptor) -> Void,
         unregisterExpandedPageHandler: @escaping (String) -> Void,
+        registerDashboardWidgetHandler: @escaping (PluginDashboardWidgetDescriptor) -> Void,
+        unregisterDashboardWidgetHandler: @escaping (String) -> Void,
         registerSettingsSectionHandler: @escaping (PluginSettingsSectionDescriptor) -> Void,
         unregisterSettingsSectionHandler: @escaping (String) -> Void,
         showStatusHandler: @escaping (String, TimeInterval) -> Void,
-        subscribeHandler: @escaping (@escaping @MainActor (PluginHostEvent) -> Void) -> UUID,
+        subscribeHandler: @escaping (@escaping @MainActor @Sendable (PluginHostEvent) -> Void) -> UUID,
         unsubscribeHandler: @escaping (UUID) -> Void,
         nowPlayingProvider: @escaping () -> PluginNowPlayingSnapshot?,
         weatherProvider: @escaping () -> PluginWeatherSnapshot,
@@ -181,6 +205,8 @@ public final class PluginContext {
         self.unregisterWidgetHandler = unregisterWidgetHandler
         self.registerExpandedPageHandler = registerExpandedPageHandler
         self.unregisterExpandedPageHandler = unregisterExpandedPageHandler
+        self.registerDashboardWidgetHandler = registerDashboardWidgetHandler
+        self.unregisterDashboardWidgetHandler = unregisterDashboardWidgetHandler
         self.registerSettingsSectionHandler = registerSettingsSectionHandler
         self.unregisterSettingsSectionHandler = unregisterSettingsSectionHandler
         self.showStatusHandler = showStatusHandler
@@ -189,6 +215,40 @@ public final class PluginContext {
         self.nowPlayingProvider = nowPlayingProvider
         self.weatherProvider = weatherProvider
         self.volumeProvider = volumeProvider
+    }
+
+    public convenience init(
+        manifest: PluginManifest,
+        registerWidgetHandler: @escaping (PluginWidgetDescriptor) -> Void,
+        unregisterWidgetHandler: @escaping (String) -> Void,
+        registerExpandedPageHandler: @escaping (PluginExpandedPageDescriptor) -> Void,
+        unregisterExpandedPageHandler: @escaping (String) -> Void,
+        registerSettingsSectionHandler: @escaping (PluginSettingsSectionDescriptor) -> Void,
+        unregisterSettingsSectionHandler: @escaping (String) -> Void,
+        showStatusHandler: @escaping (String, TimeInterval) -> Void,
+        subscribeHandler: @escaping (@escaping @MainActor @Sendable (PluginHostEvent) -> Void) -> UUID,
+        unsubscribeHandler: @escaping (UUID) -> Void,
+        nowPlayingProvider: @escaping () -> PluginNowPlayingSnapshot?,
+        weatherProvider: @escaping () -> PluginWeatherSnapshot,
+        volumeProvider: @escaping () -> PluginVolumeSnapshot?
+    ) {
+        self.init(
+            manifest: manifest,
+            registerWidgetHandler: registerWidgetHandler,
+            unregisterWidgetHandler: unregisterWidgetHandler,
+            registerExpandedPageHandler: registerExpandedPageHandler,
+            unregisterExpandedPageHandler: unregisterExpandedPageHandler,
+            registerDashboardWidgetHandler: { _ in },
+            unregisterDashboardWidgetHandler: { _ in },
+            registerSettingsSectionHandler: registerSettingsSectionHandler,
+            unregisterSettingsSectionHandler: unregisterSettingsSectionHandler,
+            showStatusHandler: showStatusHandler,
+            subscribeHandler: subscribeHandler,
+            unsubscribeHandler: unsubscribeHandler,
+            nowPlayingProvider: nowPlayingProvider,
+            weatherProvider: weatherProvider,
+            volumeProvider: volumeProvider
+        )
     }
 
     public func registerWidget(_ descriptor: PluginWidgetDescriptor) {
@@ -207,6 +267,14 @@ public final class PluginContext {
         unregisterExpandedPageHandler(id)
     }
 
+    public func registerDashboardWidget(_ descriptor: PluginDashboardWidgetDescriptor) {
+        registerDashboardWidgetHandler(descriptor)
+    }
+
+    public func unregisterDashboardWidget(id: String) {
+        unregisterDashboardWidgetHandler(id)
+    }
+
     public func registerSettingsSection(_ descriptor: PluginSettingsSectionDescriptor) {
         registerSettingsSectionHandler(descriptor)
     }
@@ -220,7 +288,7 @@ public final class PluginContext {
     }
 
     @discardableResult
-    public func subscribe(_ handler: @escaping @MainActor (PluginHostEvent) -> Void) -> UUID {
+    public func subscribe(_ handler: @escaping @MainActor @Sendable (PluginHostEvent) -> Void) -> UUID {
         subscribeHandler(handler)
     }
 
